@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .base import AgentSelector, GraphBuilder
 from .lg_builder import StaticGraphBuilder  # noqa: F401  触发 graph_builder/static 注册
+from .mindsearch import MindSearchGraphBuilder  # noqa: F401  触发 graph_builder/mindsearch 注册
 from .selectors import AgentInitSelector
 from .templates import (
     ROLE_SYSTEM,
@@ -19,6 +20,7 @@ from .templates import (
 
 __all__ = [
     "AgentSelector",
+    "MindSearchGraphBuilder",
     "GraphBuilder",
     "AgentInitSelector",
     "Role",
@@ -26,3 +28,4 @@ __all__ = [
     "TEAMS",
     "team_to_agentspecs",
 ]
+

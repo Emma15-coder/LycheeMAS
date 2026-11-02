@@ -1,0 +1,24 @@
+# MindSearch 图构建器超参（configs/*.yaml 是模板，不是被自动加载的配置源）
+name: mindsearch
+planner_name: planner
+
+# 规划循环的硬上限（代码强制，prompt 只是软约束）
+max_turns: 10
+max_subq_per_turn: 3
+max_nodes: 40
+max_concurrency: 8
+wall_clock_s: 300
+
+# 检索侧（B 实现时读取）
+search:
+  engine: ddg # ddg | bing | serper
+  topk: 3
+  max_queries: 3
+  max_read: 3
+  cache_dir: runs/mindsearch/cache
+
+# 规划/总结 LLM（端点与 key 走环境变量 LYCHEE_LLM_*）
+llm:
+  model: null
+  temperature: 0.0
+  max_new_tokens: 2048

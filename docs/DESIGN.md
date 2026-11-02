@@ -115,23 +115,23 @@ sg.add_node(name, node_fn, metadata={"agent_spec": spec})   # spec: core.types.A
 
 ## 6. 组件注册全景（按接缝分组）
 
-| 接缝 | 类别 | 已实现/可跑 | 桩（占名待接） |
-|---|---|---|---|
-| build | `graph_builder` | `static` | — |
-| build | `agent_selector` | `agentinit` | — |
-| prerun | `pre_run_optimizer` | `maspo`, `agentprune`, `agentdropout` | — |
-| prerun | `graph_pruner` | `agentprune`, `agentdropout` | `agentdropout_v2` |
-| prerun | `vocab_adapter` | — | `agentvocab` |
-| prerun | `optimizer` | `gepa`（graph-native 适配待接） | — |
-| memory | `memory_manager` | `cdm` | `mem0`, `ama` |
-| memory | `memory_router` | `static`, `fixed` | `learned`, `soft_gate` |
-| processing | `processor` | `serial`, `parallel` | — |
-| processing | `aggregator` | `self_consistency`, `aggagent`（AggAgent agentic 聚合，COLM 2026） | `dynamicagg` |
-| postrun | `attributor` | — | `all_at_once`, `step_by_step`, `binary_search` |
-| postrun | `credit_assigner` | — | `attribution_guided` |
-| postrun | `trainer` | — | —（RL 线待接） |
-| postrun | `post_run_optimizer` | — | `attribution`, `train`（图闭环桩） |
-| — | `benchmark` | 20 个（§5） | — |
+| 接缝       | 类别                 | 已实现/可跑                                                        | 桩（占名待接）                                 |
+| ---------- | -------------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
+| build      | `graph_builder`      | `static`, `mindsearch`                                             | —                                              |
+| build      | `agent_selector`     | `agentinit`                                                        | —                                              |
+| prerun     | `pre_run_optimizer`  | `maspo`, `agentprune`, `agentdropout`                              | —                                              |
+| prerun     | `graph_pruner`       | `agentprune`, `agentdropout`                                       | `agentdropout_v2`                              |
+| prerun     | `vocab_adapter`      | —                                                                  | `agentvocab`                                   |
+| prerun     | `optimizer`          | `gepa`（graph-native 适配待接）                                    | —                                              |
+| memory     | `memory_manager`     | `cdm`                                                              | `mem0`, `ama`                                  |
+| memory     | `memory_router`      | `static`, `fixed`                                                  | `learned`, `soft_gate`                         |
+| processing | `processor`          | `serial`, `parallel`                                               | —                                              |
+| processing | `aggregator`         | `self_consistency`, `aggagent`（AggAgent agentic 聚合，COLM 2026） | `dynamicagg`                                   |
+| postrun    | `attributor`         | —                                                                  | `all_at_once`, `step_by_step`, `binary_search` |
+| postrun    | `credit_assigner`    | —                                                                  | `attribution_guided`                           |
+| postrun    | `trainer`            | —                                                                  | —（RL 线待接）                                 |
+| postrun    | `post_run_optimizer` | —                                                                  | `attribution`, `train`（图闭环桩）             |
+| —          | `benchmark`          | 20 个（§5）                                                        | —                                              |
 
 > 桩能被 `REGISTRY.list` 看到是有意为之：占好名字、让消融矩阵可见。组件状态变化时同步更新本表。
 
