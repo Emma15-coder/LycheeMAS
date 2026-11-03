@@ -1,4 +1,4 @@
-# MindSearch 初始开发接口（IFACE v1.2 · 完整版）
+# MindSearch 初始开发接口（IFACE v1.3 · 完整版）
 
 > **地位**：本文件是 build 接缝接口的唯一事实来源，取代此前所有草稿。
 > **适用范围**：`src/lychee_mas/methods/build/mindsearch/` 与 `build_mindsearch*` 分支。
@@ -72,6 +72,7 @@ dag.pending()
 dag.mark_running(qid) / mark_done(qid, answer, sources) / mark_failed(qid, reason)
 dag.topological()                              # 成环 -> ValueError
 dag.to_dict() / dag.to_mermaid()               # 落盘 dag/<qid>.json / 报告可视化
+dag.from_dict()                                # 按拓扑顺序恢复，后置恢复status/answer/sources，重置id计数器，未知status显示ValueError
 len(dag)
 ```
 
@@ -270,6 +271,7 @@ make lint && make test && make selfcheck && make demo
 | v1   | 首次冻结：`TaskDAG` / ops 协议 / `SearcherResult` / `MindSearchState` / builder                                                    | —      |
 | v1.1 | searcher 提示移出 `prompts.py` → `searcher_prompts.py`（B 独占）                                                                   | 否     |
 | v1.2 | `state` 新增 `answer` / `format_ok`；新增 `answer_format.format_answer()`；登记 `planner_node_factory` 签名；补全 §3.2–§3.7、§4–§6 | 否     |
+| v1.3 | 新增 `TaskDAG.from_dict()` （检查点/续跑）`ready()` 的failed终态随planner实现 ；补全 §3.1                                          | 否     |
 
 ---
 

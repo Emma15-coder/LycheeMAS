@@ -114,6 +114,40 @@ class TaskDAG:
                            "status": n.status, "answer": n.answer, "sources": n.sources}
                           for n in (self.nodes[q] for q in self.topological())]}
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "TaskDAG":
+        """从 to_dict() 的产物还原（节点需按拓扑序，先父后子）。"""
+        if not isinstance(data, dict):
+            raise TypeError(f"TaskDAG.from_dict 需要 dict，得到 {type(data).__name__}")
+        nodes = data.get("nodes") or []
+        if not isinstance(nodes, list):
+            raise ValueError("from_dict: nodes 必须是数组")
+
+        dag = cls(str(data.get("root_query", "")))
+
+        # 1. 先建节点：to_dict 已按拓扑序输出，保证父节点先存在
+        for item in nodes:
+            qid = item.get("qid")
+            if not isinstance(qid, str) or not qid:
+                raise ValueError(f"from_dict: 非法 qid {qid!r}")
+            dag.add_node(str(item.get("query", "")),
+                        parents=list(item.get("parents") or []), qid=qid)
+
+        # 2. 再恢复状态（add_node 会把 status 一律重置成 pending）
+        for item in nodes:
+            qid, status = item["qid"], item.get("status", "pending")
+            if status == "done":
+                dag.mark_done(qid, item.get("answer", ""), list(item.get("sources") or []))
+            elif status == "failed":
+                dag.mark_failed(qid, item.get("answer", ""))
+            elif status not in ("pending", "running"):
+                raise ValueError(f"from_dict: 未知 status {status!r}（节点 {qid}）")
+
+        # 3. 修 id 计数器：否则下一条 add_node 会重新生成 n0 → 与已有节点撞车
+        used = [int(q[1:]) for q in dag.nodes if q.startswith("n") and q[1:].isdigit()]
+        dag._seq = (max(used) + 1) if used else 0
+        return dag
+
     def to_mermaid(self) -> str:
         lines = ["graph TD"]
         for qid, node in self.nodes.items():
