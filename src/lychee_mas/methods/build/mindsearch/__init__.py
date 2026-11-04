@@ -16,9 +16,9 @@ from .interpreter import (
                           parse_ops,
                           plan_with_retry,
 )
+from .planner import make_planner_node, planner_node_factory
 from .searcher import SearcherResult, SourceRef, WebSearcher
 from .state import MindSearchState
-from .planner import make_planner_node, planner_node_factory
 
 __all__ = [
     "MindSearchGraphBuilder", "TaskDAG", "DagNode", "MindSearchState",
