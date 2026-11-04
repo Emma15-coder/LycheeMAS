@@ -15,3 +15,4 @@ class MindSearchState(TypedDict, total=False):
     prompt_tokens: int
     completion_tokens: int
     error: str                     # 非空表示本次运行失败（显式记录，不静默）
+    stop_reason: str               # finish|giveup|max_turns|max_nodes|timeout|stalled|plan_error

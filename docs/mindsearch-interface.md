@@ -1,4 +1,4 @@
-# MindSearch 初始开发接口（IFACE v1.3 · 完整版）
+# MindSearch 初始开发接口（IFACE v1.4 · 完整版）
 
 > **地位**：本文件是 build 接缝接口的唯一事实来源，取代此前所有草稿。
 > **适用范围**：`src/lychee_mas/methods/build/mindsearch/` 与 `build_mindsearch*` 分支。
@@ -37,7 +37,7 @@
 | `builder.py`          | `MindSearchGraphBuilder`（注册 `graph_builder/mindsearch`）                                     | A                   | 签名冻结                                             |
 | `answer_format.py`    | `FormattedAnswer`、`format_answer`                                                              | A                   | 签名冻结                                             |
 | `prompts.py`          | `PLANNER_PROMPT`                                                                                | A                   | 不冻结（必须保留 `{question}` / `{context}` 占位符） |
-| `planner.py`          | `make_planner_node`、`planner_node_factory`                                                     | A                   | 签名冻结（实现待落地）                               |
+| `planner.py`          | `make_planner_node`、`planner_node_factory`                                                     | A                   | 已落地                                               |
 | `searcher_prompts.py` | `REWRITE_PROMPT` / `SELECT_PROMPT` / `SUMMARIZE_PROMPT`                                         | **仅 B**            | 不冻结                                               |
 | `__init__.py`         | 上述符号再导出                                                                                  | A（新增导入需通知） | —                                                    |
 
@@ -153,6 +153,8 @@ class SearcherResult:
 | `error`                               | str            | 非空表示本次运行失败（显式记录）                     |
 | `answer`                              | str            | **短答案**（打分口径）                               |
 | `format_ok`                           | bool           | `finish` 是否符合 `Answer:` 规范（prompt 遵从度）    |
+
+|`stop_reason'          ` | str | 停止的原因 |
 
 ### 3.5 构建器（`builder.py`）
 
@@ -272,6 +274,7 @@ make lint && make test && make selfcheck && make demo
 | v1.1 | searcher 提示移出 `prompts.py` → `searcher_prompts.py`（B 独占）                                                                   | 否     |
 | v1.2 | `state` 新增 `answer` / `format_ok`；新增 `answer_format.format_answer()`；登记 `planner_node_factory` 签名；补全 §3.2–§3.7、§4–§6 | 否     |
 | v1.3 | 新增 `TaskDAG.from_dict()` （检查点/续跑）`ready()` 的failed终态随planner实现 ；补全 §3.1                                          | 否     |
+| v1.4 | `state.stop_reason`（终止原因，只写不读）；`ready()` 语义不变（failed 阻塞子节点）                                                 | 否     |
 
 ---
 
