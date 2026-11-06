@@ -96,18 +96,19 @@ class StubSearcher:
 def build_searcher(llm, args: argparse.Namespace):
     if args.searcher == "stub":
         return StubSearcher()
-    # 真实检索：契约由 B 提供 —— backends/search_backend.py 暴露 make_search_fns(engine)
-    try:
-        from lychee_mas.backends.search_backend import make_search_fns
-    except ImportError as exc:
-        raise SystemExit(
-            "真实检索需要 backends/search_backend.py（B 尚未合入）。\n"
-            "先用 --searcher stub 打通链路；或让 B 提供 make_search_fns(engine) -> (search, fetch)。") from exc
+    # 真实检索：工厂由 B 提供，位于 methods 侧（与 WebSearcher 同文件）；
+    # backends/ 只放搜索/抓取原语，脚本不直接依赖它（见 IFACE v1.7 §3.4）。
+    from lychee_mas.methods.build.mindsearch import searcher as searcher_mod
 
-    from lychee_mas.methods.build.mindsearch.searcher import WebSearcher
-    search, fetch = make_search_fns(engine=args.engine)
-    return WebSearcher(llm=llm, search=search, fetch=fetch,
-                       topk=args.topk, max_queries=args.max_queries, max_read=args.max_read)
+    factory = getattr(searcher_mod, "make_web_searcher", None)
+    if factory is None:
+        raise SystemExit(
+            "真实检索需要 methods/build/mindsearch/searcher.py 提供 "
+            "make_web_searcher(llm=..., engine=..., topk=..., max_queries=..., max_read=...)"
+            "（IFACE v1.7，由 B 实现，尚未合入）。\n"
+            "先用 --searcher stub 打通链路。")
+    return factory(llm=llm, engine=args.engine, topk=args.topk,
+                   max_queries=args.max_queries, max_read=args.max_read)
 
 
 # ---------------------------------------------------------------- 三臂执行
@@ -221,7 +222,8 @@ def main() -> None:
     ap.add_argument("--arm", default="mindsearch",
                     choices=("mindsearch", "no_search", "single_turn"))
     ap.add_argument("--searcher", default="stub", choices=("stub", "real"))
-    ap.add_argument("--engine", default="ddg", help="真实检索后端：ddg | bing")
+    ap.add_argument("--engine", default="tavily",
+                    help="真实检索后端：tavily | ddg | wiki（由 B 的 make_web_searcher 实现）")
     ap.add_argument("--benchmark", default=None, help="benchmark 注册名（如 bamboogle）")
     ap.add_argument("--question", default=None, help="只跑单题（调试用）")
     ap.add_argument("--n", type=int, default=1)
@@ -298,6 +300,7 @@ def main() -> None:
 
     config = {
         "script": "run_mindsearch.py", "arm": args.arm, "searcher": args.searcher if args.arm != "no_search" else None,
+        "engine": args.engine,
         "benchmark": args.benchmark, "n": len(records), "seed": args.seed,
         "model": args.model, "base_url": args.base_url, "temperature": args.temperature,
         "max_new_tokens": args.max_new_tokens, "max_turns": args.max_turns,
