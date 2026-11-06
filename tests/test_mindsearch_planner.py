@@ -9,14 +9,16 @@ import pytest
 
 from lychee_mas.core.types import AgentSpec
 from lychee_mas.methods.build.mindsearch.dag import TaskDAG
+from lychee_mas.methods.build.mindsearch.interpreter import apply_ops, parse_ops
 from lychee_mas.methods.build.mindsearch.planner import (
     _summarize, build_context, build_plan_prompt, make_planner_node)
 from lychee_mas.methods.build.mindsearch.searcher import SearcherResult, SourceRef
 
 SPEC = AgentSpec(name="planner", role="planner", system_prompt="P {question} {context}")
 
-FINISH = '{"finish": "Answer: 42\\n因为 6x7=42"}'
+FINISH = '{"finish": "Answer: 42\\n因为 6x7=42。来源：https://x"}'
 GIVEUP = '{"finish": "Answer: 未能确认\\n未能确认：播出日期"}'
+BAD_CITATION = '{"finish": "Answer: 42\\n来源：https://evil.example/fake"}'
 
 
 # ---------------------------------------------------------------- 测试替身
@@ -261,3 +263,91 @@ def test_resume_resets_running():
     assert searcher.calls and searcher.calls[0][0] == "A"  # 被重新调度
     assert state["stop_reason"] == "finish"
     assert_no_overrun(searcher)
+
+
+# ---------------------------------------------------------------- 新增：finish 合法性 + 引用校验
+
+def test_finish_rejected_without_retrieval_then_forced_expand():
+    """强模型第 1 轮就想直接回答：拒绝 → 连续拒绝后程序化建节点，保证检索发生。"""
+    searcher = FakeSearcher([ok("Q", "a1")])
+    llm = ScriptedLLM([FINISH, FINISH, FINISH, FINISH])      # 前三次都试图直接答
+    state = run(make_node(searcher, llm, max_turns=6), {"question": "Q"})
+
+    assert state["stop_reason"] == "finish"
+    assert searcher.calls, "兜底建节点后必须发生一次检索"
+    assert state["citation_ok"] is True
+    dag = TaskDAG.from_dict(state["dag"])
+    assert [q for q in dag.nodes if dag.nodes[q].query == "Q"], "根问题应被兜底建成节点"
+    assert_no_overrun(searcher)
+
+
+def test_citation_gate_rejects_unknown_url_and_reanswers():
+    """答案引用了未检索到的 URL：拒绝并回灌，模型改用检索来源后通过。"""
+    searcher = FakeSearcher([ok("A", "a1")])
+    llm = ScriptedLLM([nodes_json("A"), BAD_CITATION, FINISH])
+    state = run(make_node(searcher, llm), {"question": "Q"})
+
+    assert state["stop_reason"] == "finish"
+    assert state["citation_ok"] is True
+    assert "evil.example" not in state["outputs"]["planner"]
+    assert_no_overrun(searcher)
+
+
+def test_citation_failure_recorded_when_retry_exhausted():
+    """引用不合规且没有重答预算：仍收尾，但显式记录 citation_ok=False。"""
+    searcher = FakeSearcher([ok("A", "a1")])
+    llm = ScriptedLLM([nodes_json("A"), BAD_CITATION])
+    state = run(make_node(searcher, llm, max_citation_retries=0), {"question": "Q"})
+
+    assert state["stop_reason"] == "finish"
+    assert state["citation_ok"] is False
+    assert any("evil.example" in u for u in state["citation_unknown"])
+
+
+def test_duplicate_subquestion_is_skipped():
+    """归一化后与已有节点相同的子问题不入图，并记 warnings。"""
+    dag = TaskDAG("Q")
+    dag.add_node("A")
+    ops = parse_ops(nodes_json("a ", "B"))
+    created, _ = apply_ops(dag, ops)
+    assert len(created) == 1
+    assert any("重复" in w for w in ops.warnings)
+
+
+def test_only_duplicates_converge_to_redundant():
+    """连续只提重复子问题：不推进 DAG，达到阈值后以 redundant 收尾。"""
+    searcher = FakeSearcher([ok("A", "a1")])
+    llm = ScriptedLLM([nodes_json("A"), nodes_json("A"), nodes_json("A"), FINISH])
+    state = run(make_node(searcher, llm, max_redundant=2), {"question": "Q"})
+
+    assert state["stop_reason"] == "redundant"
+    assert "[未收敛]" in state["outputs"]["planner"]
+    assert len(state["dag"]["nodes"]) <= 2          # 一个子问题 + FINAL
+    assert_no_overrun(searcher)
+
+
+def test_system_prompt_is_rendered_into_plan_prompt():
+    """spec.system_prompt 必须真正进入每轮提示（MASPO 改写才有效）。"""
+    dag = TaskDAG("Q")
+    prompt = build_plan_prompt("Q", dag, system_prompt="ROLE {question}/{context}")
+    assert "ROLE Q" in prompt
+    assert build_plan_prompt("Q", dag, system_prompt="")           # 空提示不报错
+
+
+def test_summary_lists_source_urls():
+    """来源 URL 必须进入提示，否则规划者无法引用检索结果。"""
+    dag = TaskDAG("q")
+    a = dag.add_node("A")
+    dag.mark_done(a, "ans", [{"url": "https://x", "title": "t"}])
+    assert "https://x" in _summarize(dag)
+
+
+def test_final_node_collects_sources():
+    """响应节点汇总已完成节点的来源（去重）。"""
+    searcher = FakeSearcher([ok("A", "a1")])
+    llm = ScriptedLLM([nodes_json("A"), FINISH])
+    state = run(make_node(searcher, llm), {"question": "Q"})
+    dag = TaskDAG.from_dict(state["dag"])
+    final = [q for q in dag.nodes if dag.nodes[q].query == "[FINAL RESPONSE]"][0]
+    assert dag.nodes[final].sources
+    assert dag.nodes[final].sources[0]["url"] == "https://x"

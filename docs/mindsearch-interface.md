@@ -47,15 +47,15 @@ prerun（MASPO apply）会**原地改写**它，所以它属于图契约；searc
 
 ### 2.2 落地状态总览（先看这张表，避免找错文件）
 
-| 项                                                                                      | 状态               | 位置 / 分支                    |
-| --------------------------------------------------------------------------------------- | ------------------ | ------------------------------ |
-| `TaskDAG` / ops 解析 / `SearcherResult` / `MindSearchState` / builder / `answer_format` | 已落地（首次推送） | 集成分支 `build_mindsearch`    |
-| `WebSearcher.run()` 实现                                                                | 未落地             | B：`build_mindsearch_searcher` |
-| `searcher_prompts.py`                                                                   | 未落地             | B：同上（**不属于集成分支**）  |
-| `planner.py`（循环 + 上限 + 并发）                                                      | 未落地             | A：`build_mindsearch_planner`  |
-| `TaskDAG.ready()` 把 `failed` 视为终态                                                  | 提案 v1.3          | A：planner 分支，随实现落地    |
-| 3 个 benchmark loader + 注册                                                            | 未落地             | B：`eval_mindsearch`           |
-| `scripts/run_mindsearch.py` 等入口                                                      | 未落地             | A/B 各自子分支                 |
+| 项                                                                                      | 状态                              | 位置 / 分支                    |
+| --------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------ |
+| `TaskDAG` / ops 解析 / `SearcherResult` / `MindSearchState` / builder / `answer_format` | 已落地（首次推送）                | 集成分支 `build_mindsearch`    |
+| `WebSearcher.run()` 实现                                                                | 未落地                            | B：`build_mindsearch_searcher` |
+| `searcher_prompts.py`                                                                   | 未落地                            | B：同上（**不属于集成分支**）  |
+| `planner.py`（循环 + 上限 + 并发）                                                      | 未落地                            | A：`build_mindsearch_planner`  |
+| `TaskDAG.ready()` 把 `failed` 视为终态                                                  | 提案 v1.3                         | A：planner 分支，随实现落地    |
+| 3 个 benchmark loader + 注册                                                            | 未落地                            | B：`eval_mindsearch`           |
+| `scripts/run_mindsearch.py` 等入口                                                      | A完成第一版撰写，完成模拟检索测试 | A/B 各自子分支                 |
 
 ---
 
