@@ -16,3 +16,6 @@ class MindSearchState(TypedDict, total=False):
     completion_tokens: int
     error: str                     # 非空表示本次运行失败（显式记录，不静默）
     stop_reason: str               # finish|giveup|max_turns|max_nodes|timeout|stalled|plan_error
+                                   # |redundant|forced_expand|premature_finish|exception
+    citation_ok: bool              # 答案引用是否可追溯到检索 sources（引用级校验）
+    citation_unknown: list[str]   # 未被检索到的引用 URL（citation_ok=False 时非空）
