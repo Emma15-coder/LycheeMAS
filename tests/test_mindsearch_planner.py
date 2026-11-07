@@ -97,14 +97,14 @@ def test_context_parent_first_then_root():
     b = dag.add_node("B", parents=[a])
     ctx = build_context(dag, b)
     assert ctx.startswith("[n0] 结论A")
-    assert ctx.endswith("根问题：根问题")
+    assert ctx.endswith("Root question: 根问题")
     assert "\n---\n" in ctx
 
 
 def test_context_without_parent_and_unknown_qid():
     dag = TaskDAG("根问题"); a = dag.add_node("A")
-    assert "无父任务" in build_context(dag, a)
-    with pytest.raises(ValueError, match="节点不存在"):
+    assert "no parent" in build_context(dag, a)
+    with pytest.raises(ValueError, match="unknown node"):
         build_context(dag, "n9")
 
 
@@ -124,15 +124,15 @@ def test_summary_rows_linked_to_max_nodes():
     for i in range(5):
         dag.add_node(f"子问题{i}")
     out = _summarize(dag, max_rows=3)
-    assert "另有 2 个节点未展示" in out
+    assert "2 more nodes not shown" in out
 
 
 def test_prompt_three_modes():
     dag = TaskDAG("q"); dag.add_node("A")
-    assert "最多 3 个子问题" in build_plan_prompt("q", dag)
-    assert "已到轮数" in build_plan_prompt("q", dag, finish_only=True)
-    assert "未能确认" in build_plan_prompt("q", dag, give_up=True)
-    assert "上一次输出不合法" in build_plan_prompt("q", dag, feedback="未知字段 foo")
+    assert "At most 3 sub-questions" in build_plan_prompt("q", dag)
+    assert "turn/budget limit is reached" in build_plan_prompt("q", dag, finish_only=True)
+    assert "cannot confirm" in build_plan_prompt("q", dag, give_up=True)
+    assert "previous output was invalid" in build_plan_prompt("q", dag, feedback="unknown field foo")
 
 
 # ---------------------------------------------------------------- 主循环
@@ -152,7 +152,7 @@ def test_two_rounds_converge():
     assert_no_overrun(searcher)
 
     dag = TaskDAG.from_dict(state["dag"])
-    assert len(dag) == 3                                  # n0 + n1 + [FINAL RESPONSE]
+    assert len(dag) == 3                                  # n0 + n1 + response
     final = [q for q in dag.nodes if dag.nodes[q].query == "[FINAL RESPONSE]"]
     assert len(final) == 1
     assert all(dag.nodes[p].status == "done" for p in dag.nodes[final[0]].parents)
@@ -174,7 +174,7 @@ def test_plan_error_after_retries():
 
     assert state["stop_reason"] == "plan_error"
     assert state["truncated"] is True
-    assert "[未收敛]" in state["outputs"]["planner"]
+    assert "[UNRESOLVED]" in state["outputs"]["planner"]
     assert searcher.calls == []                           # 规划都没成功，不应检索
 
 
@@ -311,7 +311,7 @@ def test_duplicate_subquestion_is_skipped():
     ops = parse_ops(nodes_json("a ", "B"))
     created, _ = apply_ops(dag, ops)
     assert len(created) == 1
-    assert any("重复" in w for w in ops.warnings)
+    assert any("duplicate" in w for w in ops.warnings)
 
 
 def test_only_duplicates_converge_to_redundant():
@@ -321,7 +321,7 @@ def test_only_duplicates_converge_to_redundant():
     state = run(make_node(searcher, llm, max_redundant=2), {"question": "Q"})
 
     assert state["stop_reason"] == "redundant"
-    assert "[未收敛]" in state["outputs"]["planner"]
+    assert "[UNRESOLVED]" in state["outputs"]["planner"]
     assert len(state["dag"]["nodes"]) <= 2          # 一个子问题 + FINAL
     assert_no_overrun(searcher)
 
@@ -351,3 +351,49 @@ def test_final_node_collects_sources():
     final = [q for q in dag.nodes if dag.nodes[q].query == "[FINAL RESPONSE]"][0]
     assert dag.nodes[final].sources
     assert dag.nodes[final].sources[0]["url"] == "https://x"
+
+
+FINISH_DEPS = '{"finish": "Answer: 42\\n来源：https://x", "response_parents": ["n0"]}'
+
+
+def test_response_node_uses_model_parents():
+    """论文语义：response 节点的依赖由模型指定，而不是自动连全部节点。"""
+    searcher = FakeSearcher([ok("A", "a1"), ok("B", "b1")])
+    llm = ScriptedLLM([nodes_json("A", "B"), FINISH_DEPS])
+    state = run(make_node(searcher, llm), {"question": "Q"})
+
+    dag = TaskDAG.from_dict(state["dag"])
+    resp = [q for q in dag.nodes if dag.nodes[q].query == "[FINAL RESPONSE]"][0]
+    assert dag.nodes[resp].parents == ["n0"]
+
+
+def test_invalid_response_parents_rejected_then_auto_connected():
+    """响应依赖非法：先回灌一次；仍非法则退回"连接全部已完成节点"。"""
+    searcher = FakeSearcher([ok("A", "a1")])
+    bad = '{"finish": "Answer: 42\\n来源：https://x", "response_parents": ["n9"]}'
+    llm = ScriptedLLM([nodes_json("A"), bad, FINISH])
+    state = run(make_node(searcher, llm), {"question": "Q"})
+
+    assert state["stop_reason"] == "finish"
+    dag = TaskDAG.from_dict(state["dag"])
+    resp = [q for q in dag.nodes if dag.nodes[q].query == "[FINAL RESPONSE]"][0]
+    assert dag.nodes[resp].parents == ["n0"]
+
+
+def test_blocked_child_visible_in_summary():
+    """父节点失败后，子节点永远不 ready：摘要必须标 blocked，规划者才知道要绕开。"""
+    dag = TaskDAG("Q")
+    a = dag.add_node("A")
+    dag.mark_failed(a, "HTTP 403")
+    dag.add_node("B", parents=[a])
+    assert "blocked by n0" in _summarize(dag)
+
+
+def test_context_respects_total_budget():
+    """多父节点时按总预算均分，避免 prompt 爆炸。"""
+    dag = TaskDAG("Q")
+    ids = [dag.add_node(f"P{i}") for i in range(6)]
+    for q in ids:
+        dag.mark_done(q, "x" * 2000)
+    c = dag.add_node("C", parents=ids)
+    assert len(build_context(dag, c)) <= 2400 + 200

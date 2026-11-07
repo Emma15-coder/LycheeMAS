@@ -27,6 +27,7 @@ from .interpreter import OpsApplyError, OpsParseError, plan_with_retry
 _SUMMARY_LIMIT = 200      # 摘要里每条结论的最大字符数
 _PARENT_LIMIT = 800       # 单条父结论进入 context 的上限（中文≈800 token）
 _ROWS_MARGIN = 8          # 摘要行数 = max_nodes + 8，正常不会触发截断
+_CONTEXT_BUDGET = 2400    # 单节点 context 的总字符预算（多父节点时均分）
 
 
 def _clip(text: str, limit: int, head_ratio: float = 0.7) -> str:
@@ -60,7 +61,7 @@ def _render_system(system_prompt: str, question: str) -> str:
     if not text:
         return ""
     try:
-        return text.format_map(_SafeDict(question=question, context="（见下方任务图）",
+        return text.format_map(_SafeDict(question=question, context="(see the task graph below)",
                                          dag="", memory=""))
     except (KeyError, ValueError, IndexError):
         return text
@@ -68,14 +69,19 @@ def _render_system(system_prompt: str, question: str) -> str:
 
 # ---------------------------------------------------------------- 上下文
 
-def build_context(dag: TaskDAG, qid: str, *, parent_limit: int = _PARENT_LIMIT) -> str:
-    """检索者上下文：父节点结论（可多条）+ 分隔线 + 根问题（不含兄弟/历史）。"""
+def build_context(dag: TaskDAG, qid: str, *, parent_limit: int = _PARENT_LIMIT,
+                  budget: int = _CONTEXT_BUDGET) -> str:
+    """检索者上下文：父节点结论（可多条）+ 分隔线 + 根问题（不含兄弟/历史）。
+
+    多父节点时按总字符预算均分，避免 5 个以上父节点把 prompt 撑爆。
+    """
     if qid not in dag.nodes:
-        raise ValueError(f"build_context: 节点不存在 {qid!r}")
+        raise ValueError(f"build_context: unknown node {qid!r}")
     node = dag.nodes[qid]
-    parents = [f"[{p}] {_clip(dag.nodes[p].answer, parent_limit)}" for p in node.parents]
-    head = "\n".join(parents) if parents else "（无父任务：本节点直接对应根问题）"
-    return f"{head}\n---\n根问题：{dag.root_query}"
+    per = min(parent_limit, max(200, budget // max(1, len(node.parents))))
+    parents = [f"[{p}] {_clip(dag.nodes[p].answer, per)}" for p in node.parents]
+    head = "\n".join(parents) if parents else "(no parent: this node maps to the root question)"
+    return f"{head}\n---\nRoot question: {dag.root_query}"
 
 
 # ---------------------------------------------------------------- 摘要
@@ -86,8 +92,22 @@ def _src_url(src: Any) -> str:
     return str(getattr(src, "url", "") or "")
 
 
+def _blocked_by(dag: TaskDAG, qid: str) -> str:
+    """该节点若有 failed 祖先，返回该祖先 id；否则返回 ""（多父节点时最易发生）。"""
+    stack, seen = list(dag.nodes[qid].parents), set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen or cur not in dag.nodes:
+            continue
+        seen.add(cur)
+        if dag.nodes[cur].status == "failed":
+            return cur
+        stack.extend(dag.nodes[cur].parents)
+    return ""
+
+
 def _summarize(dag: TaskDAG, *, limit: int = _SUMMARY_LIMIT, max_rows: int = 48) -> str:
-    """给规划者看：id、状态（失败标注次数）、子问题、结论摘要、来源 URL。
+    """给规划者看：id、状态（失败标注次数/被阻塞）、子问题、结论摘要、来源 URL。
 
     来源必须出现在提示里：否则规划者无法引用检索结果，citation 校验永远不通过。
     """
@@ -98,14 +118,18 @@ def _summarize(dag: TaskDAG, *, limit: int = _SUMMARY_LIMIT, max_rows: int = 48)
         n = dag.nodes[qid]
         tries = fails.get(_norm_q(n.query), 0)
         status = f"{n.status}×{tries}" if tries > 1 else n.status
+        if n.status == "pending":
+            blocker = _blocked_by(dag, qid)
+            if blocker:
+                status = f"blocked by {blocker}"
         srcs = [u for u in (_src_url(s) for s in (n.sources or [])) if u][:2]
         src_txt = f" [src: {', '.join(srcs)}]" if srcs else ""
         rows.append(f"- {qid} [{status}] {_clip(n.query, 80)} => "
                     f"{_clip(n.answer, limit)}{src_txt}")
     if not rows:
-        return "(空)"
+        return "(empty)"
     if len(order) > max_rows:
-        rows.append(f"- …（另有 {len(order) - max_rows} 个节点未展示）")
+        rows.append(f"- … ({len(order) - max_rows} more nodes not shown)")
     return "\n".join(rows)
 
 
@@ -116,8 +140,9 @@ def _summarize(dag: TaskDAG, *, limit: int = _SUMMARY_LIMIT, max_rows: int = 48)
 #     ' "edges": [["<src>", "<dst>"]],\n'
 #     ' "finish": "Answer: <短答案>\\n<解释与来源>"}'
 # )
-_EXPAND_EXAMPLE = '{"nodes": [{"query": "<子问题>", "parents": ["<已有id>"]}]}'
-_FINISH_EXAMPLE = '{"finish": "Answer: <短答案>\\n<解释与来源>"}'
+_EXPAND_EXAMPLE = '{"nodes": [{"query": "<sub-question>", "parents": ["<existing-id>"]}]}'
+_FINISH_EXAMPLE = ('{"finish": "Answer: <short answer>\\n<explanation and sources>", '
+                   '"response_parents": ["<completed-id>"]}')
 
 
 def build_plan_prompt(question: str, dag: TaskDAG, feedback: str = "", *,
@@ -129,50 +154,57 @@ def build_plan_prompt(question: str, dag: TaskDAG, feedback: str = "", *,
     if sys_text:
         head += [sys_text, ""]
     else:
-        head.append(f"用户问题：{question}")
+        head.append(f"Question: {question}")
     head += [
-        "当前任务图：",
+        "Current task graph:",
         _summarize(dag, max_rows=max_rows),
-        f"已有节点 id：{sorted(dag.nodes)}",
+        f"Existing node ids: {sorted(dag.nodes)}",
     ]
     if give_up:
         return "\n".join(head + [
-            "多次检索均未获得有效信息，禁止再发起检索。",
-            '请只输出一个 JSON：{"finish": "Answer: <能确认的结论，或 未能确认>\\n'
-            '未能确认：<缺失的信息 + 已尝试过的角度>"}',
-            "把尖括号占位符替换成真实内容，不要保留占位符。",
+            "Repeated searches produced no usable information; do not search again.",
+            'Output exactly one JSON object: {"finish": "Answer: <what can be confirmed, '
+            'or cannot confirm>\\nMissing: <what is missing and which angles were tried>"}',
+            "Replace every angle-bracket placeholder with real content; keep no placeholders.",
         ])
     if finish_only:
         return "\n".join(head + [
-            "已到轮数/预算上限，禁止再扩图。",
-            '请只输出一个 JSON：{"finish": "Answer: <短答案>\\n<解释与来源>"}',
-            "把尖括号占位符替换成真实内容，不要保留占位符。",
+            "The turn/budget limit is reached; do not expand the graph any more.",
+            'Output exactly one JSON object: {"finish": "Answer: <short answer>\\n'
+            '<explanation and sources>"}',
+            "Replace every angle-bracket placeholder with real content; keep no placeholders.",
         ])
     if must_expand:
         # 首轮（还没有任何检索结果）只给扩图模板：让 finish 在结构上无处可填
         return "\n".join(head + [
-            "本轮只能扩图：只输出下面这种 JSON，不要输出 finish。",
-            '{"nodes": [{"query": "<子问题>", "parents": ["<已有id>"]}]}',
-            "同一轮最多 3 个子问题；parents 必须是已有节点 id，第一层用空数组；"
-            "不要重复已有子问题；不需要的字段直接省略。",
+            "This turn you may only expand the graph: output the JSON below and no finish.",
+            _EXPAND_EXAMPLE,
+            "At most 3 sub-questions per turn; parents must be existing node ids "
+            "([] for first-level sub-questions); do not repeat existing sub-questions; "
+            "omit any field you do not use.",
         ])
     if feedback:
-        head.append(f"上一次输出不合法：{feedback}")
+        head.append(f"Your previous output was invalid: {feedback}")
     head += [
-        "每轮只输出一个 JSON 对象，而且是以下两种形态之一（不要解释、不要 markdown 代码块）：",
-        "A. 继续扩图（本轮不回答）：",
+        "Output exactly one JSON object per turn, in one of the two forms below "
+        "(no explanation, no markdown code fence):",
+        "A. Expand the graph (no answer this turn):",
         _EXPAND_EXAMPLE,
-        "B. 收敛回答（本轮不扩图）：",
+        "B. Converge (no expansion this turn):",
         _FINISH_EXAMPLE,
-        "规则：",
-        "1. nodes字段 与 finish字段 二选一，不能同时出现，也不能都为空；",
-        "2. 同一轮最多 3 个子问题；",
-        "3. parents 必须是已有节点 id（形如 n0、n1），第一层子问题用空数组；",
-        "4. 不要重复已有子问题；",
-        "5. 标 [failed] 的子问题只能换一种问法重试，不要原样重发；",
-        "6. 信息不足就继续扩图（给 nodes）；信息足够就只给 finish（含来源链接）；",
-        "7. finish 的第一行必须是 `Answer: <短答案>`（实体/yes/no/数字），第二行起写解释。",
-        "把尖括号占位符替换成真实内容，不要保留占位符。",
+        "Rules:",
+        "1. Use either the nodes field or the finish field -- never both, never neither;",
+        "2. At most 3 sub-questions per turn;",
+        "3. parents must be existing node ids (e.g. n0, n1); use [] for first-level sub-questions;",
+        "4. Do not repeat an existing sub-question;",
+        "5. A sub-question marked [failed] may only be retried with different wording;",
+        "6. If information is insufficient, expand the graph (nodes); if it is sufficient, "
+        "output finish only, with source links;",
+        "7. The first line of finish must be `Answer: <short answer>` "
+        "(entity / yes / no / number), with the explanation on the following lines;",
+        "8. finish must include response_parents listing only the completed node ids you actually "
+        "used (e.g. [\"n1\",\"n3\"]); the harness builds the [FINAL RESPONSE] node from them.",
+        "Replace every angle-bracket placeholder with real content; keep no placeholders.",
     ]
     return "\n".join(head)
 
@@ -211,7 +243,7 @@ async def _retrieve(ready: list[str], dag: TaskDAG, searcher: Any, tok: dict,
                 dag.mark_done(qid, res.answer, [s.to_dict() for s in res.sources])
                 ok += 1
             elif getattr(res, "status", "") == "empty":
-                dag.mark_done(qid, "（未检索到相关信息）")   # 空结论不阻塞子节点
+                dag.mark_done(qid, "(no relevant information found)")   # 空结论不阻塞子节点
                 empty += 1
             else:
                 dag.mark_failed(qid, getattr(res, "error", "") or "searcher error")
@@ -223,20 +255,25 @@ async def _retrieve(ready: list[str], dag: TaskDAG, searcher: Any, tok: dict,
 
 # ---------------------------------------------------------------- 收尾
 
+RESPONSE_NODE = "[FINAL RESPONSE]"   # 语义等同论文的 response 节点，沿用既有命名
+
 def _final(state: dict, name: str, dag: TaskDAG, text: str, turn: int, tok: dict,
            truncated: bool, reason: str, add_response: bool = True,
            citation_ok: bool = False,
-           citation_unknown: list[str] | None = None) -> dict:
-    if reason != "finish" and "[未收敛]" not in text:
+           citation_unknown: list[str] | None = None,
+           response_parents: list[str] | None = None) -> dict:
+    if reason != "finish" and "[UNRESOLVED]" not in text:
         # 非正常收敛的答案必须带标注，避免被评估当成有效输出
-        text = f"{text}\n\n[未收敛] stop_reason={reason}；turns={turn}；nodes={len(dag)}"
+        text = f"{text}\n\n[UNRESOLVED] stop_reason={reason}; turns={turn}; nodes={len(dag)}"
     fmt = format_answer(text)
-    if add_response and not any(n.query == "[FINAL RESPONSE]" for n in dag.nodes.values()):
+    if add_response and not any(n.query == RESPONSE_NODE for n in dag.nodes.values()):
         done_ids = [q for q in dag.topological() if dag.nodes[q].status == "done"]
-        # 响应节点汇总所有已完成节点的来源，便于审计（答案引用 vs 图内来源）
+        # 论文：response 节点由模型指定依赖；未指定时退回"连接全部已完成节点"
+        deps = [p for p in (response_parents or done_ids) if p in dag.nodes]
+        # 响应节点汇总这些依赖节点的来源，便于审计（答案引用 vs 图内来源）
         seen: set[str] = set()
         sources: list[dict] = []
-        for q in done_ids:
+        for q in deps:
             for src in dag.nodes[q].sources or []:
                 url = _src_url(src)
                 if url and url not in seen:
@@ -245,7 +282,7 @@ def _final(state: dict, name: str, dag: TaskDAG, text: str, turn: int, tok: dict
                                     "title": str((src.get("title") if isinstance(src, dict)
                                                   else getattr(src, "title", "")) or ""),
                                     "snippet": ""})
-        rid = dag.add_node("[FINAL RESPONSE]", parents=done_ids)
+        rid = dag.add_node(RESPONSE_NODE, parents=deps)
         dag.mark_done(rid, fmt.long, sources)
     return {
         "outputs": {**state.get("outputs", {}), name: fmt.long},
@@ -265,8 +302,8 @@ def _final(state: dict, name: str, dag: TaskDAG, text: str, turn: int, tok: dict
 def _fallback(dag: TaskDAG, why: str) -> str:
     done = [dag.nodes[q] for q in dag.topological()
             if dag.nodes[q].status == "done" and dag.nodes[q].answer]
-    tip = _clip(done[-1].answer, 120) if done else "（未收集到有效结论）"
-    return f"Answer: {tip}\n[未收敛] {why}；共 {len(dag)} 个节点。"
+    tip = _clip(done[-1].answer, 120) if done else "(no usable conclusion collected)"
+    return f"Answer: {tip}\n[UNRESOLVED] {why}; {len(dag)} nodes in total."
 
 
 # ---------------------------------------------------------------- 节点工厂
@@ -281,9 +318,10 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
                       max_premature_retries: int = 2,
                       max_citation_retries: int = 1,
                       max_redundant: int = 2,
+                      max_response_retries: int = 1,
                       require_citation: bool = True):
     if not is_terminal:
-        raise ValueError("mindsearch 只有 planner 一个节点，is_terminal 必须为 True")
+        raise ValueError("mindsearch has a single planner node; is_terminal must be True")
 
     max_rows = max_nodes + _ROWS_MARGIN          # ← 摘要行数与 max_nodes 联动
 
@@ -303,6 +341,7 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
         premature = 0            # 连续"未检索就 finish"的次数
         citation_retry = 0       # 引用不合规的重答次数
         redundant = 0            # 连续"只提重复子问题"的轮数
+        response_retry = 0       # response 依赖非法时的重答次数
         pending_feedback = ""    # 待回灌给下一次规划调用的提示（跨轮传递）
         citation_ok, citation_unknown = False, []
         t0 = time.monotonic()
@@ -332,7 +371,7 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
                         system_prompt=spec.system_prompt),
                     dag, max_retry=max_retry, max_subq_per_turn=max_subq_per_turn)
             except (OpsParseError, OpsApplyError) as exc:
-                return _final(state, spec.name, dag, _fallback(dag, f"规划失败：{exc}"),
+                return _final(state, spec.name, dag, _fallback(dag, f"planning failed: {exc}"),
                               turn, tok, True, "plan_error", add_response_node)
             pending_feedback = ""
 
@@ -342,8 +381,8 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
                 if redundant >= max_redundant:
                     truncated, stop = True, "redundant"
                     break
-                pending_feedback = ("这些子问题已经存在（或被去重），不要重复；"
-                                    "请换一个角度提出新子问题，或直接 finish。")
+                pending_feedback = ("These sub-questions already exist (or were deduplicated). "
+                                    "Propose a new angle, or output finish.")
                 continue
             redundant = 0
 
@@ -354,15 +393,17 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
                     # finish 是"终态动作"：还没有任何检索结果时不予接受
                     premature += 1
                     if premature <= max_premature_retries:
-                        pending_feedback = ("本轮还没有任何检索结果，禁止直接回答；"
-                                            "请只输出 nodes，把问题拆成子问题。")
+                        pending_feedback = (
+                            "No search result has been collected yet; do not answer directly. "
+                            "Output only nodes (sub-questions).")
                         continue
                     # 连续拒绝仍不分解：程序化兜底，保证至少发生一次检索
                     truncated, stop = True, "forced_expand"
                     if not dag.nodes:
                         forced = dag.add_node(question, parents=[])
-                        pending_feedback = (f"已强制把原问题建成节点 {forced} 并检索；"
-                                            "下一轮请基于检索结果再决定扩图或收尾。")
+                        pending_feedback = (
+                            f"Forced the root question into node {forced} and searched it. "
+                            "Next turn decide expand or finish based on the results.")
                         continue
                     break
 
@@ -372,10 +413,24 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
                     citation_retry += 1
                     pending_feedback = report.feedback()
                     continue
+
+                # 论文：response 节点由模型指定依赖；非法依赖先回灌一次，再退回自动连接
+                deps = ops.response_parents
+                bad = [p for p in deps
+                       if p not in dag.nodes or dag.nodes[p].status != "done"]
+                if bad and response_retry < max_response_retries:
+                    response_retry += 1
+                    pending_feedback = (
+                        f"[FINAL RESPONSE] may only link to completed nodes; invalid: {bad}. "
+                        "Re-emit finish with response_parents listing completed ids only.")
+                    continue
+                if bad:
+                    deps = []
                 return _final(state, spec.name, dag, ops.finish, turn, tok,
                               truncated, "finish", add_response_node,
                               citation_ok=citation_ok,
-                              citation_unknown=citation_unknown)
+                              citation_unknown=citation_unknown,
+                              response_parents=deps)
             if len(dag) > max_nodes:
                 truncated, stop = True, "max_nodes"
                 break
@@ -394,10 +449,11 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
                 lambda fb: build_plan_prompt(question, dag, fb, finish_only=not give_up,
                                              give_up=give_up, max_rows=max_rows),
                 dag, max_retry=0)
-            text = ops.finish or _fallback(dag, f"未能在 {turn} 轮内收敛（{stop}）")
+            text = ops.finish or _fallback(dag, f"did not converge within {turn} turns ({stop})")
         except (OpsParseError, OpsApplyError):
-            text = _fallback(dag, f"未能在 {turn} 轮内收敛（{stop}）")
-        # 收尾时只记录引用状态，不再回灌（已无预算）
+            text = _fallback(dag, f"did not converge within {turn} turns ({stop})")
+        # 收尾时只记录引用状态、不再回灌（已无预算）；但"没引用"必须如实记 False，
+        # 否则 require_citation=False 会让它被算成合规。
         report = check_citations(text, dag, require_citation=True)
         return _final(state, spec.name, dag, text, turn, tok, True, stop,
                       add_response_node, citation_ok=report.ok,

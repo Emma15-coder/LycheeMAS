@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable
 
 from .dag import TaskDAG
 
-OPS_KEYS = {"nodes", "edges", "finish"}
+OPS_KEYS = {"nodes", "edges", "finish", "response_parents"}
 
 
 class OpsParseError(ValueError):
@@ -34,6 +34,7 @@ class Ops:
     nodes: list[NewNode] = field(default_factory=list)
     edges: list[tuple[str, str]] = field(default_factory=list)
     finish: str | None = None
+    response_parents: list[str] = field(default_factory=list)   # finish 时响应节点的依赖
     truncated: bool = False
     warnings: list[str] = field(default_factory=list)
 
@@ -42,7 +43,7 @@ def _extract_json(text: str) -> str:
     """从带前后缀/```fence 的输出里取出第一个平衡的 JSON 对象。"""
     start = text.find("{")
     if start < 0:
-        raise OpsParseError("输出里找不到 JSON 对象（必须以 { 开头）")
+        raise OpsParseError("No JSON object found in the output (must start with '{')")
     depth, in_str, esc = 0, False, False
     for i in range(start, len(text)):
         ch = text[i]
@@ -62,62 +63,77 @@ def _extract_json(text: str) -> str:
             depth -= 1
             if depth == 0:
                 return text[start:i + 1]
-    raise OpsParseError("JSON 对象括号不闭合（缺少 }）")
+    raise OpsParseError("Unbalanced JSON braces (missing '}')")
 
 
 def parse_ops(text: str) -> Ops:
     try:
         data = json.loads(_extract_json(text))
     except json.JSONDecodeError as exc:
-        raise OpsParseError(f"JSON 语法错误：{exc.msg}（位置 {exc.pos}）") from exc
+        raise OpsParseError(f"JSON syntax error: {exc.msg} (at position {exc.pos})") from exc
     if not isinstance(data, dict):
-        raise OpsParseError(f"顶层必须是 JSON 对象，得到 {type(data).__name__}")
+        raise OpsParseError(f"Top-level value must be a JSON object, got {type(data).__name__}")
 
+    if "parents" in data and "response_parents" not in data:
+        raise OpsParseError(
+            "Top-level field renamed to response_parents "
+            "(node dependencies go in nodes[i].parents)")
     unknown = set(data) - OPS_KEYS
     if unknown:
-        raise OpsParseError(f"出现未知字段 {sorted(unknown)}；只允许 {sorted(OPS_KEYS)}")
+        raise OpsParseError(f"Unknown field(s) {sorted(unknown)}; allowed: {sorted(OPS_KEYS)}")
 
     raw_nodes = data.get("nodes", [])
     if not isinstance(raw_nodes, list):
-        raise OpsParseError("nodes 必须是数组")
+        raise OpsParseError("nodes must be a list")
     nodes: list[NewNode] = []
     for i, item in enumerate(raw_nodes):
         if not isinstance(item, dict):
-            raise OpsParseError(f"nodes[{i}] 必须是对象")
+            raise OpsParseError(f"nodes[{i}] must be an object")
         query = item.get("query")
         if not isinstance(query, str) or not query.strip():
-            raise OpsParseError(f"nodes[{i}].query 必须是非空字符串")
+            raise OpsParseError(f"nodes[{i}].query must be a non-empty string")
         parents = item.get("parents", [])
         if not isinstance(parents, list) or not all(isinstance(p, str) for p in parents):
-            raise OpsParseError(f"nodes[{i}].parents 必须是字符串数组")
+            raise OpsParseError(f"nodes[{i}].parents must be a list of strings")
         nodes.append(NewNode(query=query.strip(), parents=list(parents)))
 
     raw_edges = data.get("edges", [])
     if not isinstance(raw_edges, list):
-        raise OpsParseError("edges 必须是数组")
+        raise OpsParseError("edges must be a list")
     edges: list[tuple[str, str]] = []
     for i, item in enumerate(raw_edges):
         if (not isinstance(item, list) or len(item) != 2
                 or not all(isinstance(x, str) for x in item)):
-            raise OpsParseError(f"edges[{i}] 必须是 [src, dst] 两个字符串")
+            raise OpsParseError(f"edges[{i}] must be [src, dst] with two strings")
         edges.append((item[0], item[1]))
 
     finish = data.get("finish")
     if finish == "":
         finish = None
     if finish is not None and (not isinstance(finish, str) or not finish.strip()):
-        raise OpsParseError("finish 必须是非空字符串或省略")
+        raise OpsParseError("finish must be a non-empty string, or omitted")
+
+    raw_parents = data.get("response_parents", [])
+    if not isinstance(raw_parents, list) or not all(isinstance(p, str) for p in raw_parents):
+        raise OpsParseError("response_parents must be a list of strings")
+    response_parents = list(dict.fromkeys(raw_parents))     # 去重保序
 
     warnings: list[str] = []
     if nodes and finish is not None:
         # 模型常见写法：本轮既扩图又给出（过早的）答案。保留扩图、丢弃 finish，
         # 否则一次"贪心回答"会把合法的 nodes 一起丢掉，导致零检索收敛。
-        warnings.append("nodes 与 finish 同时出现：保留 nodes，忽略 finish")
+        warnings.append("nodes and finish both present: kept nodes, ignored finish")
         finish = None
+        response_parents = []
     if not nodes and finish is None:
-        raise OpsParseError("既没有 nodes 也没有 finish：空规划无意义")
+        raise OpsParseError("Neither nodes nor finish: an empty plan is meaningless")
+    if response_parents and finish is None:
+        raise OpsParseError(
+            "response_parents may only be used together with finish; "
+            "put expansion dependencies in nodes[i].parents")
     return Ops(nodes=nodes, edges=edges,
                finish=finish.strip() if finish is not None else None,
+               response_parents=response_parents,
                warnings=warnings)
 
 
@@ -160,7 +176,7 @@ def apply_ops(dag: TaskDAG, ops: Ops, *, max_subq_per_turn: int = 3,
         existing.add(key)
 
     if skipped:
-        ops.warnings.append(f"跳过重复子问题 {len(skipped)} 个：{skipped[:2]}")
+        ops.warnings.append(f"skipped {len(skipped)} duplicate sub-question(s): {skipped[:2]}")
 
     for src, dst in ops.edges:
         if src not in dag.nodes or dst not in dag.nodes:
@@ -201,5 +217,5 @@ async def plan_with_retry(llm: Callable[[str], Awaitable[Any]],
             return ops, created, truncated
         except (OpsParseError, OpsApplyError) as exc:
             last = exc
-            feedback = f"上一次输出不合法：{exc}。请只输出修正后的 JSON，不要解释。"
-    raise OpsParseError(f"规划连续 {max_retry + 1} 次不合法，已放弃：{last}")
+            feedback = f"{exc}. Output only the corrected JSON, without explanation."
+    raise OpsParseError(f"Planning failed {max_retry + 1} times in a row; gave up: {last}")

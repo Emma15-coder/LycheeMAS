@@ -31,7 +31,7 @@ def test_nodes_with_finish_keeps_nodes():
     ops = parse_ops('{"nodes":[{"query":"q"}],"finish":"ans"}')
     assert [n.query for n in ops.nodes] == ["q"]
     assert ops.finish is None
-    assert any("忽略 finish" in w for w in ops.warnings)
+    assert any("ignored finish" in w for w in ops.warnings)
 
 
 def test_apply_unknown_parent_raises():
@@ -67,6 +67,6 @@ def test_retry_exhausted_raises():
     async def bad_llm(prompt):
         return "never json"
 
-    with pytest.raises(OpsParseError, match="放弃"):
+    with pytest.raises(OpsParseError, match="gave up"):
         asyncio.run(plan_with_retry(bad_llm, lambda fb: "P", TaskDAG("q"), max_retry=1))
 

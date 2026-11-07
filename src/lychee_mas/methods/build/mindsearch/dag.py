@@ -34,11 +34,11 @@ class TaskDAG:
                  qid: str | None = None) -> str:
         qid = qid or self._next_id()
         if qid in self.nodes:
-            raise ValueError(f"TaskDAG 节点重复: {qid!r}")
-        parents = list(parents or [])
+            raise ValueError(f"TaskDAG duplicate node: {qid!r}")
+        parents = list(dict.fromkeys(parents or []))     # 去重保序：多父节点允许，重复父节点无意义
         unknown = [p for p in parents if p not in self.nodes]
         if unknown:
-            raise ValueError(f"TaskDAG 父节点不存在: {unknown}（节点 {qid!r}）")
+            raise ValueError(f"TaskDAG unknown parent(s): {unknown} (node {qid!r})")
         self.nodes[qid] = DagNode(qid=qid, query=query, parents=parents)
         for p in parents:
             self.nodes[p].children.append(qid)
@@ -47,11 +47,11 @@ class TaskDAG:
     def add_edge(self, src: str, dst: str) -> None:
         for q in (src, dst):
             if q not in self.nodes:
-                raise ValueError(f"TaskDAG 节点不存在: {q!r}")
+                raise ValueError(f"TaskDAG unknown node: {q!r}")
         if src in self.nodes[dst].parents:
             return
         if src == dst or self._reachable(dst, src):
-            raise ValueError(f"TaskDAG 加边会成环: {src!r} -> {dst!r}")
+            raise ValueError(f"TaskDAG edge would create a cycle: {src!r} -> {dst!r}")
         self.nodes[dst].parents.append(src)
         self.nodes[src].children.append(dst)
 
@@ -90,7 +90,7 @@ class TaskDAG:
 
     def _require(self, qid: str) -> DagNode:
         if qid not in self.nodes:
-            raise ValueError(f"TaskDAG 节点不存在: {qid!r}")
+            raise ValueError(f"TaskDAG unknown node: {qid!r}")
         return self.nodes[qid]
 
     def topological(self) -> list[str]:
@@ -105,7 +105,7 @@ class TaskDAG:
                 if indeg[child] == 0:
                     queue.append(child)
         if len(order) != len(self.nodes):
-            raise ValueError("TaskDAG 成环，无法拓扑排序")
+            raise ValueError("TaskDAG has a cycle; topological sort is impossible")
         return order
 
     def to_dict(self) -> dict:
@@ -121,7 +121,7 @@ class TaskDAG:
             raise TypeError(f"TaskDAG.from_dict 需要 dict，得到 {type(data).__name__}")
         nodes = data.get("nodes") or []
         if not isinstance(nodes, list):
-            raise ValueError("from_dict: nodes 必须是数组")
+            raise ValueError("from_dict: nodes must be a list")
 
         dag = cls(str(data.get("root_query", "")))
 
@@ -129,7 +129,7 @@ class TaskDAG:
         for item in nodes:
             qid = item.get("qid")
             if not isinstance(qid, str) or not qid:
-                raise ValueError(f"from_dict: 非法 qid {qid!r}")
+                raise ValueError(f"from_dict: invalid qid {qid!r}")
             dag.add_node(str(item.get("query", "")),
                         parents=list(item.get("parents") or []), qid=qid)
 
@@ -141,7 +141,7 @@ class TaskDAG:
             elif status == "failed":
                 dag.mark_failed(qid, item.get("answer", ""))
             elif status not in ("pending", "running"):
-                raise ValueError(f"from_dict: 未知 status {status!r}（节点 {qid}）")
+                raise ValueError(f"from_dict: unknown status {status!r} (node {qid})")
 
         # 3. 修 id 计数器：否则下一条 add_node 会重新生成 n0 → 与已有节点撞车
         used = [int(q[1:]) for q in dag.nodes if q.startswith("n") and q[1:].isdigit()]

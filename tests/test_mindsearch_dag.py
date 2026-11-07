@@ -15,7 +15,7 @@ def test_ready_and_status_flow():
 
 def test_unknown_parent_raises():
     dag = TaskDAG("root?")
-    with pytest.raises(ValueError, match="父节点不存在"):
+    with pytest.raises(ValueError, match="unknown parent"):
         dag.add_node("A", parents=["nope"])
 
 
@@ -23,7 +23,7 @@ def test_cycle_edge_raises():
     dag = TaskDAG("root?")
     a = dag.add_node("A")
     b = dag.add_node("B", parents=[a])
-    with pytest.raises(ValueError, match="成环"):
+    with pytest.raises(ValueError, match="cycle"):
         dag.add_edge(b, a)
 
 
@@ -49,5 +49,5 @@ def test_dag_roundtrip():
 def test_from_dict_unknown_status_raises():
     blob = {"root_query": "r", "nodes": [
         {"qid": "n0", "query": "A", "parents": [], "status": "zombie", "answer": "", "sources": []}]}
-    with pytest.raises(ValueError, match="未知 status"):
+    with pytest.raises(ValueError, match="unknown status"):
         TaskDAG.from_dict(blob)
