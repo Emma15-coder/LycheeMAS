@@ -35,6 +35,7 @@ class Ops:
     edges: list[tuple[str, str]] = field(default_factory=list)
     finish: str | None = None
     truncated: bool = False
+    warnings: list[str] = field(default_factory=list)
 
 
 def _extract_json(text: str) -> str:
@@ -102,19 +103,36 @@ def parse_ops(text: str) -> Ops:
         edges.append((item[0], item[1]))
 
     finish = data.get("finish")
+    if finish == "":
+        finish = None
     if finish is not None and (not isinstance(finish, str) or not finish.strip()):
         raise OpsParseError("finish 必须是非空字符串或省略")
 
+    warnings: list[str] = []
     if nodes and finish is not None:
-        raise OpsParseError("同一轮不能既新增子问题又 finish：二选一")
+        # 模型常见写法：本轮既扩图又给出（过早的）答案。保留扩图、丢弃 finish，
+        # 否则一次"贪心回答"会把合法的 nodes 一起丢掉，导致零检索收敛。
+        warnings.append("nodes 与 finish 同时出现：保留 nodes，忽略 finish")
+        finish = None
     if not nodes and finish is None:
         raise OpsParseError("既没有 nodes 也没有 finish：空规划无意义")
     return Ops(nodes=nodes, edges=edges,
-               finish=finish.strip() if finish is not None else None)
+               finish=finish.strip() if finish is not None else None,
+               warnings=warnings)
 
 
-def apply_ops(dag: TaskDAG, ops: Ops, *, max_subq_per_turn: int = 3) -> tuple[list[str], bool]:
-    """把 ops 写进 DAG；返回 (新建节点 id, 是否因超限被截断)。"""
+def _norm_q(query: str) -> str:
+    """子问题去重用的归一化：小写、压空白。"""
+    return " ".join((query or "").lower().split())
+
+
+def apply_ops(dag: TaskDAG, ops: Ops, *, max_subq_per_turn: int = 3,
+              dedupe: bool = True) -> tuple[list[str], bool]:
+    """把 ops 写进 DAG；返回 (新建节点 id, 是否因超限被截断)。
+
+    dedupe=True 时，与已有节点（含本批已建节点）归一化后完全相同的子问题被跳过，
+    记入 ops.warnings；一个都没建时返回空列表，由 planner 判定"无进展"。
+    """
     if ops.finish is not None:
         return [], False
 
@@ -123,8 +141,14 @@ def apply_ops(dag: TaskDAG, ops: Ops, *, max_subq_per_turn: int = 3) -> tuple[li
     if len(picked) > max_subq_per_turn:
         picked, truncated = picked[:max_subq_per_turn], True
 
+    existing = {_norm_q(n.query) for n in dag.nodes.values()}
     created: list[str] = []
+    skipped: list[str] = []
     for node in picked:
+        key = _norm_q(node.query)
+        if dedupe and key in existing:
+            skipped.append(node.query)
+            continue
         unknown = [p for p in node.parents if p not in dag.nodes]
         if unknown:
             raise OpsApplyError(
@@ -133,6 +157,10 @@ def apply_ops(dag: TaskDAG, ops: Ops, *, max_subq_per_turn: int = 3) -> tuple[li
             created.append(dag.add_node(node.query, parents=node.parents))
         except ValueError as exc:
             raise OpsApplyError(str(exc)) from exc
+        existing.add(key)
+
+    if skipped:
+        ops.warnings.append(f"跳过重复子问题 {len(skipped)} 个：{skipped[:2]}")
 
     for src, dst in ops.edges:
         if src not in dag.nodes or dst not in dag.nodes:
@@ -163,6 +191,10 @@ async def plan_with_retry(llm: Callable[[str], Awaitable[Any]],
     last: Exception | None = None
     for _ in range(max_retry + 1):
         text = _text(await llm(prompt_builder(feedback)))
+        import os
+        if os.environ.get("LYCHEE_DEBUG_PLANNER") == "1":          # ← 新增
+            print(f"\n{text}\n----- end -----",
+                  flush=True)
         try:
             ops = parse_ops(text)
             created, truncated = apply_ops(dag, ops, max_subq_per_turn=max_subq_per_turn)

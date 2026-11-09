@@ -6,16 +6,18 @@
 from __future__ import annotations
 
 from .builder import MindSearchGraphBuilder
+from .citation import CitationReport, check_citations, extract_urls, normalize_url
 from .dag import DagNode, TaskDAG
 from .interpreter import (
-                          NewNode,
-                          Ops,
-                          OpsApplyError,
-                          OpsParseError,
-                          apply_ops,
-                          parse_ops,
-                          plan_with_retry,
-)
+                        NewNode,
+                        Ops,
+                        OpsApplyError,
+                        OpsParseError,
+                        apply_ops,
+                        parse_ops,
+                        plan_with_retry,
+                        )
+from .planner import make_planner_node, planner_node_factory
 from .searcher import SearcherResult, SourceRef, WebSearcher
 from .state import MindSearchState
 
@@ -23,4 +25,6 @@ __all__ = [
     "MindSearchGraphBuilder", "TaskDAG", "DagNode", "MindSearchState",
     "Ops", "NewNode", "parse_ops", "apply_ops", "plan_with_retry",
     "OpsParseError", "OpsApplyError", "WebSearcher", "SearcherResult", "SourceRef",
+    "make_planner_node", "planner_node_factory",
+    "CitationReport", "check_citations", "extract_urls", "normalize_url",
 ]

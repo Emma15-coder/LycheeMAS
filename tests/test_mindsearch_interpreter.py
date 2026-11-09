@@ -20,11 +20,18 @@ def test_parse_with_prose_and_fence():
     '{"nodes":[]}',
     '{"nodes":[],"foo":1}',
     '{"nodes":[{"query":""}]}',
-    '{"nodes":[{"query":"q"}],"finish":"ans"}',
 ])
 def test_illegal_ops_raise(bad):
     with pytest.raises(OpsParseError):
         parse_ops(bad)
+
+
+def test_nodes_with_finish_keeps_nodes():
+    """模型常见的"既扩图又回答"：保留 nodes、丢弃过早的 finish（v1.5 起）。"""
+    ops = parse_ops('{"nodes":[{"query":"q"}],"finish":"ans"}')
+    assert [n.query for n in ops.nodes] == ["q"]
+    assert ops.finish is None
+    assert any("忽略 finish" in w for w in ops.warnings)
 
 
 def test_apply_unknown_parent_raises():
