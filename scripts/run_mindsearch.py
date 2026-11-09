@@ -48,6 +48,10 @@ SINGLE_TURN_PROMPT = """根据下面的检索结果回答问题。只依据检�
 """
 
 
+# LLM 调用计数（每题重置；用于框架指标 num_model_calls）
+_LLM_CALLS = {"n": 0}
+
+
 # ---------------------------------------------------------------- 依赖构造
 
 def _git(*args: str) -> str:
@@ -71,6 +75,7 @@ def build_llm(args: argparse.Namespace):
     )
 
     async def llm(prompt: str):
+        _LLM_CALLS["n"] += 1
         # generate_chat 是同步的：必须丢线程，否则并发检索会堵住事件循环
         return await asyncio.to_thread(
             backend.generate_chat, [{"role": "user", "content": prompt}], args.max_new_tokens)
@@ -164,6 +169,8 @@ async def run_single_turn(searcher, llm, question: str):
             "completion_tokens": int(getattr(out, "n_gen_tokens", 0) or 0)
             + int(res.completion_tokens or 0)}
 
+async def run_ReAct(searcher, llm, question: str):
+    pass
 
 # ---------------------------------------------------------------- 产物
 
@@ -299,7 +306,7 @@ def main() -> None:
     (out_dir / "sources.jsonl").touch()
 
     config = {
-        "script": "run_mindsearch.py", "arm": args.arm, "searcher": args.searcher if args.arm != "no_search" else None,
+        "script": "run_mindsearch.py", "arm": args.arm, "searcher": args.searcher,
         "engine": args.engine,
         "benchmark": args.benchmark, "n": len(records), "seed": args.seed,
         "model": args.model, "base_url": args.base_url, "temperature": args.temperature,
@@ -324,6 +331,7 @@ def main() -> None:
     samples: list[dict] = []
     for i, rec in enumerate(records):
         t0 = time.time()
+        _LLM_CALLS["n"] = 0
         try:
             if args.arm == "mindsearch":
                 res = asyncio.run(run_mindsearch(app, rec["question"]))
@@ -350,6 +358,7 @@ def main() -> None:
 
         sample = {
             "case_id": case_id, "task": rec["task"], "kind": rec["kind"],
+            "scorer_kind": rec["kind"], "method": "mindsearch",
             "arm": args.arm, "question": rec["question"], "gold": rec["gold"],
             "prediction": pred, "prediction_raw": res["answer_raw"],
             "score": score,
@@ -362,6 +371,11 @@ def main() -> None:
             "dag_depth": dag_depth(res["dag"]),
             "prompt_tokens": res["prompt_tokens"],
             "completion_tokens": res["completion_tokens"],
+            # 框架 aggregate_samples 认的规范字段名（别名，避免 token 被算成 0）
+            "input_positions_total": res["prompt_tokens"],
+            "output_tokens_total": res["completion_tokens"],
+            "num_model_calls": int(_LLM_CALLS["n"]),
+            "case_wall_time_s": latency,
             "latency_s": latency, "error": err,
         }
         samples.append(sample)

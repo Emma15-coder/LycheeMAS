@@ -11,7 +11,7 @@ wall_clock_s: 300
 
 # 检索侧（B 实现时读取）
 search:
-  engine: ddg # ddg | bing | serper
+  engine: tavily
   topk: 3
   max_queries: 3
   max_read: 3

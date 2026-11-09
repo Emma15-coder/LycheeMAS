@@ -28,20 +28,20 @@
 
 ### 2.1 文件与所有权
 
-| 文件                        | 导出符号                                                                                        | Owner               | 冻结级别                                             |
-| --------------------------- | ----------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------- |
-| `dag.py`                    | `TaskDAG`、`DagNode`                                                                            | A                   | 签名冻结                                             |
-| `interpreter.py`            | `Ops`、`NewNode`、`parse_ops`、`apply_ops`、`plan_with_retry`、`OpsParseError`、`OpsApplyError` | A                   | 签名 + 语义冻结                                      |
-| `searcher.py`               | `SourceRef`、`SearcherResult`、`WebSearcher`、`LLM/SearchFn/FetchFn`                            | 实现 B / 消费 A     | 签名 + 三条语义冻结                                  |
-| `state.py`                  | `MindSearchState`                                                                               | 共享                | **键名冻结**                                         |
-| `builder.py`                | `MindSearchGraphBuilder`（注册 `graph_builder/mindsearch`）                                     | A                   | 签名冻结                                             |
-| `answer_format.py`          | `FormattedAnswer`、`format_answer`                                                              | A                   | 签名冻结                                             |
-| `prompts.py`                | `PLANNER_PROMPT`                                                                                | A                   | 不冻结（必须保留 `{question}` / `{context}` 占位符） |
-| `planner.py`                | `make_planner_node`、`planner_node_factory`                                                     | A                   | 签名 + 语义冻结（已落地）                            |
-| `searcher_prompts.py`       | `REWRITE_PROMPT` / `SELECT_PROMPT` / `SUMMARIZE_PROMPT`                                         | **仅 B**            | 不冻结                                               |
-| `__init__.py`               | 上述符号再导出                                                                                  | A（新增导入需通知） | —                                                    |
-| `scripts/run_mindsearch.py` | 三臂入口（argparse / 落盘 / 打分）                                                              | A                   | 不冻结（实验脚本）                                   |
-| `backends/tavily_search.py` | `search` / `fetch` 原语（Tavily Search / Extract）                                              | **仅 B**            | 不冻结（实现细节）                                   |
+| 文件                  | 导出符号                                                                                        | Owner               | 冻结级别                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------- |
+| `dag.py`              | `TaskDAG`、`DagNode`                                                                            | A                   | 签名冻结                                             |
+| `interpreter.py`      | `Ops`、`NewNode`、`parse_ops`、`apply_ops`、`plan_with_retry`、`OpsParseError`、`OpsApplyError` | A                   | 签名 + 语义冻结                                      |
+| `searcher.py`         | `SourceRef`、`SearcherResult`、`WebSearcher`、`LLM/SearchFn/FetchFn`                            | 实现 B / 消费 A     | 签名 + 三条语义冻结                                  |
+| `state.py`            | `MindSearchState`                                                                               | 共享                | **键名冻结**                                         |
+| `builder.py`          | `MindSearchGraphBuilder`（注册 `graph_builder/mindsearch`）                                     | A                   | 签名冻结                                             |
+| `answer_format.py`    | `FormattedAnswer`、`format_answer`                                                              | A                   | 签名冻结                                             |
+| `prompts.py`          | `PLANNER_PROMPT`                                                                                | A                   | 不冻结（必须保留 `{question}` / `{context}` 占位符） |
+| `planner.py`          | `make_planner_node`、`planner_node_factory`                                                     | A                   | 签名 + 语义冻结（已落地）                            |
+| `searcher_prompts.py` | `REWRITE_PROMPT` / `SELECT_PROMPT` / `SUMMARIZE_PROMPT`                                         | **仅 B**            | 不冻结                                               |
+| `__init__.py`         | 上述符号再导出                                                                                  | A（新增导入需通知） | —                                                    |
+| `scripts/run_mindsearch.py` | 三臂入口（argparse / 落盘 / 打分） | A | 不冻结（实验脚本） |
+| `backends/tavily_search.py` | `search` / `fetch` 原语（Tavily Search / Extract） | **仅 B** | 不冻结（实现细节） |
 
 **为什么 `prompts.py` 只有 planner**：`builder` 把它注入 `AgentSpec.system_prompt`，
 prerun（MASPO apply）会**原地改写**它，所以它属于图契约；searcher 的提示不进入图契约，
@@ -49,17 +49,17 @@ prerun（MASPO apply）会**原地改写**它，所以它属于图契约；searc
 
 ### 2.2 落地状态总览（先看这张表，避免找错文件）
 
-| 项                                                                                 | 状态       | 位置 / 分支                    |
-| ---------------------------------------------------------------------------------- | ---------- | ------------------------------ |
-| `TaskDAG` / ops / `SearcherResult` / `MindSearchState` / builder / `answer_format` | 已落地     | 集成分支 `build_mindsearch`    |
-| `planner.py`（循环 + 上限 + 并发 + finish 合法性 + 引用校验 + 去重）               | **已落地** | A：`build_mindsearch_planner`  |
-| `citation.py`（引用级校验）                                                        | **已落地** | 同上                           |
-| `scripts/run_mindsearch.py`（三臂 + 落盘 + 指标）                                  | **已落地** | A：同上                        |
-| `WebSearcher.run()` 四步实现                                                       | 未落地     | B：`build_mindsearch_searcher` |
-| `make_web_searcher` 工厂 + `backends/tavily_search.py`                             | 未落地     | B：同上                        |
-| `searcher_prompts.py`                                                              | 未落地     | B：同上                        |
-| 3 个 benchmark loader + 注册                                                       | 未落地     | B：`eval_mindsearch`           |
-| `analyze_mindsearch_run.py` / `render_dag.py`                                      | 未落地     | B：同上                        |
+| 项                                                                                      | 状态               | 位置 / 分支                    |
+| --------------------------------------------------------------------------------------- | ------------------ | ------------------------------ |
+| `TaskDAG` / ops / `SearcherResult` / `MindSearchState` / builder / `answer_format`      | 已落地             | 集成分支 `build_mindsearch`    |
+| `planner.py`（循环 + 上限 + 并发 + finish 合法性 + 引用校验 + 去重）                     | **已落地**         | A：`build_mindsearch_planner`  |
+| `citation.py`（引用级校验）                                                              | **已落地**         | 同上                           |
+| `scripts/run_mindsearch.py`（三臂 + 落盘 + 指标）                                        | **已落地**         | A：同上                        |
+| `WebSearcher.run()` 四步实现                                                            | 未落地             | B：`build_mindsearch_searcher` |
+| `make_web_searcher` 工厂 + `backends/tavily_search.py`                                  | 未落地             | B：同上                        |
+| `searcher_prompts.py`                                                                   | 未落地             | B：同上                        |
+| 3 个 benchmark loader + 注册                                                            | 未落地             | B：`eval_mindsearch`           |
+| `analyze_mindsearch_run.py` / `render_dag.py`                                           | 未落地             | B：同上                        |
 
 ---
 
@@ -92,16 +92,19 @@ TaskDAG.from_dict(data)                        # 反序列化：检查点 / 续�
 LLM 每轮只输出一个 JSON 对象：
 
 ```json
-{
-  "nodes": [{ "query": "子问题", "parents": ["n0"] }],
-  "edges": [["n0", "n1"]],
-  "finish": "Answer: <短答案>\n<解释与来源>"
-}
+// 形态 A：扩图
+{ "nodes": [{ "query": "子问题", "parents": ["n0"] }] }
+
+// 形态 B：收敛（response_parents 指定 [FINAL RESPONSE] 节点挂到哪些已完成节点上）
+{ "finish": "Answer: <short answer>\n<explanation and sources>", "response_parents": ["n0", "n2"] }
 ```
 
 | 规则                                                                    | 失败行为                          |
 | ----------------------------------------------------------------------- | --------------------------------- |
-| 字段白名单：只允许 `nodes` / `edges` / `finish`                         | `OpsParseError`                   |
+| 字段白名单：只允许 `nodes` / `edges` / `finish` / `response_parents` | `OpsParseError` |
+| 扩图的依赖写在 `nodes[i].parents`（正常节点同样要写）；`response_parents` 仅与 `finish` 同用 | `OpsParseError` |
+| `nodes` 与 `finish` **互斥**；两者同时出现时保留 `nodes`、丢弃 `finish` | 记 `Ops.warnings` |
+| `finish.response_parents` 必须是**已完成**节点；非法时先回灌一次，仍非法则退回连接全部已完成节点 | 回灌 / 自动连接 |
 | `query` 必须非空字符串；`parents` / `edges` 必须引用**已存在**的节点 id | `OpsParseError` / `OpsApplyError` |
 | `nodes` 与 `finish` **互斥**，且不能都为空                              | `OpsParseError`                   |
 | 允许前后缀说明与 `fence`，取第一个平衡的 `{}`                           | 解析失败 → 回灌重试               |
@@ -145,7 +148,7 @@ class SearcherResult:
 1. **失败不抛异常**：网络/抓取失败返回 `status="error"` + `error` 文本，`run()` 内部最多重试 1 次；
    由 planner 决定重规划还是 `mark_failed`。本层不假装成功，也不炸掉整轮。
 2. **空结果**：检索到了但没有可用内容 → `status="empty"`、`answer=""`。
-3. **context 语义**：固定为 `"父节点 answer" + "\n---\n" + "根问题"`，**不含**兄弟节点与全部历史。
+3. **context 语义**：固定为 `"parent answer(s)" + "\n---\n" + "Root question: ..."`，**不含**兄弟节点与全部历史。
 
 **构造入口（v1.7 新增，B 实现，A 只调用）**
 
@@ -157,7 +160,8 @@ def make_web_searcher(*, llm, engine: str = "tavily", topk: int = 3,
                       max_queries: int = 3, max_read: int = 3) -> WebSearcher: ...
 ```
 
-- `engine`：`"tavily"`（默认）| `"ddg"` | `"wiki"`；未知值显式 `ValueError`（不静默降级）；
+- `engine`：`"tavily"`（默认，唯一已实现）；`"ddg"` / `"wiki"` 为预留名，未实现时显式
+  `ValueError`（不静默降级到其他后端）；
 - **Tavily 为选定后端**：密钥走环境变量 `TAVILY_API_KEY`（不写进配置、不进 `run_config.json`）；搜索与抓取原语放在 `backends/`（B 实现），工厂负责注入；
 - 若后端返回 `raw_content`（Tavily 可一次带回正文），工厂用它充当 `fetch` 结果，`pages_read` 记实际使用条数；
 - 未实现时**函数不存在**，`scripts/run_mindsearch.py` 会 `SystemExit` 并提示"先用 `--searcher stub`"——不做隐式回退；
@@ -184,8 +188,8 @@ def make_web_searcher(*, llm, engine: str = "tavily", topk: int = 3,
 | `error`                               | str            | 非空表示本次运行失败（显式记录）                     |
 | `answer`                              | str            | **短答案**（打分口径）                               |
 | `format_ok`                           | bool           | `finish` 是否符合 `Answer:` 规范（prompt 遵从度）    |
-| `citation_ok`                         | bool           | 答案引用是否可追溯到检索 sources（v1.5）             |
-| `citation_unknown`                    | list[str]      | 未被检索到的引用 URL（v1.5，配合 citation_ok=False） |
+| `citation_ok`                        | bool           | 答案引用是否可追溯到检索 sources（v1.5）              |
+| `citation_unknown`                   | list[str]      | 未被检索到的引用 URL（v1.5，配合 citation_ok=False）  |
 
 ### 3.5 构建器（`builder.py`）
 
@@ -341,39 +345,45 @@ PYTHONPATH=src python scripts/run_mindsearch.py --arm single_turn --searcher rea
 
 ### 6.2 测试归属
 
-| 测试                                                                         | 归属 | 是否联网     |
-| ---------------------------------------------------------------------------- | ---- | ------------ |
-| `tests/test_mindsearch_{dag,interpreter,planner,citation,builder,answer}.py` | A    | 否           |
-| `tests/test_run_mindsearch_wiring.py`（工厂参数透传 + stub 端到端）          | A    | 否           |
-| `tests/test_mindsearch_searcher_factory.py`（工厂 / 未知 engine / 缺密钥）   | B    | 否           |
-| `tests/test_tavily_backend.py`（响应映射 / 限流 / 超时 / raw_content）       | B    | 否（mock）   |
-| 真实集成冒烟（`skipif` 无 `TAVILY_API_KEY`）                                 | B    | 是，默认跳过 |
+| 测试 | 归属 | 是否联网 |
+| --- | --- | --- |
+| `tests/test_mindsearch_{dag,interpreter,planner,citation,builder,answer}.py` | A | 否 |
+| `tests/test_run_mindsearch_wiring.py`（工厂参数透传 + stub 端到端） | A | 否 |
+| `tests/test_mindsearch_searcher_factory.py`（工厂 / 未知 engine / 缺密钥） | B | 否 |
+| `tests/test_tavily_backend.py`（响应映射 / 限流 / 超时 / raw_content） | B | 否（mock） |
+| 真实集成冒烟（`skipif` 无 `TAVILY_API_KEY`） | B | 是，默认跳过 |
 
 ---
 
 ## 7. 版本记录
 
-| 版本 | 变更                                                                                                                                                 | 破坏性 |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| v1   | 首次冻结：`TaskDAG` / ops 协议 / `SearcherResult` / `MindSearchState` / builder                                                                      | —      |
-| v1.1 | searcher 提示移出 `prompts.py` → `searcher_prompts.py`（B 独占）                                                                                     | 否     |
-| v1.2 | `state` 新增 `answer` / `format_ok`；新增 `answer_format.format_answer()`；登记 `planner_node_factory` 签名；补全 §3.2–§3.7、§4–§6                   | 否     |
-| v1.3 | `TaskDAG.from_dict()` 落地（检查点/续跑）；`ready()` 的 `failed` 终态随 planner 实现                                                                 | 否     |
-| v1.4 | `state.stop_reason`；`ready()` 语义不变（failed 阻塞子节点）                                                                                         | 否     |
-| v1.5 | finish 合法性约束：`min_nodes_before_finish` + 连续拒绝后兜底建节点；`citation_check` 引用级校验（不通过则拒绝并重答）；解析器容忍 nodes+finish 并存 | 否     |
-| v1.6 | `spec.system_prompt` 接入 `build_plan_prompt`（MASPO 改写才真正生效）；子问题归一化去重 + `redundant` 收敛；`prompts.py` 与当轮 JSON 格式分离        | 否     |
-| v1.7 | 新增真实检索构造入口 `make_web_searcher`（`methods/build/mindsearch/searcher.py`，B 实现）；`backends/` 退为内部原语，脚本不再直接依赖               | 否     |
-| v1.8 | 真实检索后端定为 **Tavily**：`make_web_searcher` 的 `engine` 默认 `tavily`，密钥 `TAVILY_API_KEY`；搜索/抓取原语落 `backends/`（B 实现），工厂注入   | 否     |
+| 版本 | 变更                                                                                                                               | 破坏性 |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| v1   | 首次冻结：`TaskDAG` / ops 协议 / `SearcherResult` / `MindSearchState` / builder                                                    | —      |
+| v1.1 | searcher 提示移出 `prompts.py` → `searcher_prompts.py`（B 独占）                                                                   | 否     |
+| v1.2 | `state` 新增 `answer` / `format_ok`；新增 `answer_format.format_answer()`；登记 `planner_node_factory` 签名；补全 §3.2–§3.7、§4–§6 | 否     |
+| v1.3 | `TaskDAG.from_dict()` 落地（检查点/续跑）；`ready()` 的 `failed` 终态随 planner 实现 | 否     |
+| v1.4 | `state.stop_reason`；`ready()` 语义不变（failed 阻塞子节点） | 否 |
+| v1.5 | finish 合法性约束：`min_nodes_before_finish` + 连续拒绝后兜底建节点；`citation_check` 引用级校验（不通过则拒绝并重答）；解析器容忍 nodes+finish 并存 | 否 |
+| v1.6 | `spec.system_prompt` 接入 `build_plan_prompt`（MASPO 改写才真正生效）；子问题归一化去重 + `redundant` 收敛；`prompts.py` 与当轮 JSON 格式分离 | 否 |
+| v1.7 | 新增真实检索构造入口 `make_web_searcher`（`methods/build/mindsearch/searcher.py`，B 实现）；`backends/` 退为内部原语，脚本不再直接依赖 | 否 |
+| v1.8 | 真实检索后端定为 **Tavily**：`make_web_searcher` 的 `engine` 默认 `tavily`，密钥 `TAVILY_API_KEY`；搜索/抓取原语落 `backends/`（B 实现），工厂注入 | 否 |
 
 ---
 
 ## 8. 与论文的偏差（须写入 PR 与报告）
+- **响应节点**：论文由 WebPlanner 通过 `generate_response` 创建名为 `response` 的节点并指定依赖；
+  本实现沿用既有命名 `[FINAL RESPONSE]`（语义一致），由 `finish.parents` 给出依赖，
+  缺省时连接全部已完成节点。
+- **多父节点**：论文 `add_node(query, deps)` 本身允许任意多依赖，本实现一致；但增加了三条工程约束：
+  依赖去重、失败父节点的子节点在摘要中标为 `blocked←<id>`、单节点上下文总量按 2400 字符预算均分。
+
 
 | 项       | 论文                                     | 本实现                         | 原因                                                            |
 | -------- | ---------------------------------------- | ------------------------------ | --------------------------------------------------------------- |
 | 规划动作 | Python 代码 + 解释器（code as planning） | JSON ops + 严格校验 + 错误回灌 | 无 `exec` 安全面；错误可定位并反馈（论文附录 E 的等价物）       |
 | 执行图   | 运行时动态扩展的 DAG                     | 静态壳 + 节点内 DAG            | `extract_view` 只接受静态 DAG / 唯一终端，保住 prerun 能力      |
-| 检索器   | WebSearcher（Bing）                      | 可注入的 search / fetch 回调   | 引擎与 SDK 解耦，便于替换与测试                                 |
+| 检索器   | WebSearcher（Bing）                      | WebSearcher（Tavily Search/Extract） | 引擎可替换：search/fetch 为注入回调，未知 engine 显式报错       |
 | 打分     | HotpotQA 用 GPT-4o judge                 | `exact`（+`f1` 辅助）          | 保持离线纯函数、可复算；详见 `docs/mindsearch-eval-protocol.md` |
 
 ---
