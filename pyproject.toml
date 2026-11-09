@@ -27,6 +27,8 @@ runtime = [
 langgraph = ["langgraph>=1.0,<2"]
 numeric = ["numpy"]
 config = ["pyyaml", "hydra-core"]
+# Searcher 实时推理；Tavily 适配使用标准库，无 Tavily SDK/MCP。
+searcher = ["openai>=1.0,<3", "httpx>=0.27,<1"]
 # L1 construct / AgentInit 选择器：多目标 Pareto 选择（官方同款 vendi_score，不自实现）。
 construct = ["numpy", "vendi_score"]
 dev = ["pytest", "ruff", "mypy"]

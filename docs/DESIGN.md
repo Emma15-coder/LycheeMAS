@@ -77,6 +77,10 @@ sg.add_node(name, node_fn, metadata={"agent_spec": spec})   # spec: core.types.A
 
 回答「由谁组队、怎么连」。`build_langgraph(method, node_factory, state_schema, ...) -> StateGraph`：节点函数语义（生成后端、状态形状）由实验方以 `node_factory(spec, is_terminal)` 注入，构建器负责 AgentSpec 链、通信结构、元数据挂载与 START→…→END 执行边。已实现 `graph_builder/static`（team 模板链）；选队器 `agent_selector/agentinit`（EMNLP'25，多样性×相关性 Pareto 选队）产出 AgentSpec 列表经 `agents=` 传入。
 
+MindSearch 的独立检索模块已实现：查询改写 → URL去重 → 选页/抓取 → 带引用总结；
+Tavily Search/Extract与异步模型适配见 [Searcher运行说明](mindsearch-searcher.md)。
+Planner主循环仍未接入；构建器只提供静态外壳，不能视为完整MindSearch端到端实现。
+
 ### 4.2 prerun（运行前优化，`plugins/prerun/` × `methods/prerun/`）
 
 回答「执行前对图做什么优化」。`optimize_langgraph(sg, method, **kw) -> sg`，图进图出；两段式：`mode="optimize"`（离线重活，产物落 JSON）/ `mode="apply"`（加载注入，即插即用）。已接：
