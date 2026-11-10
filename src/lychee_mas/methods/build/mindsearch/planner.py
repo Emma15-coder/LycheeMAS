@@ -216,6 +216,10 @@ def _counted(llm: Callable[[str], Any], tok: dict) -> Callable[[str], Any]:
         res = await llm(prompt)
         tok["p"] += int(getattr(res, "n_prompt_pos", 0) or 0)
         tok["c"] += int(getattr(res, "n_gen_tokens", 0) or 0)
+        tok["planner_prompt_tokens"] = tok.get("planner_prompt_tokens", 0) + int(
+            getattr(res, "n_prompt_pos", 0) or 0)
+        tok["planner_completion_tokens"] = tok.get("planner_completion_tokens", 0) + int(
+            getattr(res, "n_gen_tokens", 0) or 0)
         return res
     return inner
 
@@ -239,6 +243,13 @@ async def _retrieve(ready: list[str], dag: TaskDAG, searcher: Any, tok: dict,
                 return
             tok["p"] += int(getattr(res, "prompt_tokens", 0) or 0)
             tok["c"] += int(getattr(res, "completion_tokens", 0) or 0)
+            for key, value in (
+                ("searcher_prompt_tokens", getattr(res, "prompt_tokens", 0)),
+                ("searcher_completion_tokens", getattr(res, "completion_tokens", 0)),
+                ("queries_count", len(getattr(res, "queries", None) or [])),
+                ("pages_read", getattr(res, "pages_read", 0)),
+            ):
+                tok[key] = tok.get(key, 0) + int(value or 0)
             if getattr(res, "is_ok", lambda: False)():
                 dag.mark_done(qid, res.answer, [s.to_dict() for s in res.sources])
                 ok += 1
@@ -296,6 +307,9 @@ def _final(state: dict, name: str, dag: TaskDAG, text: str, turn: int, tok: dict
         "citation_unknown": list(citation_unknown or []),
         "prompt_tokens": tok["p"],
         "completion_tokens": tok["c"],
+        **{key: tok.get(key, 0) for key in (
+            "planner_prompt_tokens", "planner_completion_tokens",
+            "searcher_prompt_tokens", "searcher_completion_tokens", "queries_count", "pages_read")},
     }
 
 
@@ -335,6 +349,10 @@ def make_planner_node(spec: Any, is_terminal: bool, *, searcher: Any, llm: Any,
         turn = int(state.get("turns", 0) or 0)
         tok = {"p": int(state.get("prompt_tokens", 0) or 0),
                "c": int(state.get("completion_tokens", 0) or 0)}
+        for key in ("planner_prompt_tokens", "planner_completion_tokens",
+                    "searcher_prompt_tokens", "searcher_completion_tokens",
+                    "queries_count", "pages_read"):
+            tok[key] = int(state.get(key, 0) or 0)
         truncated, stop = False, "max_turns"
         fail_streak = 0
         stalled = 0

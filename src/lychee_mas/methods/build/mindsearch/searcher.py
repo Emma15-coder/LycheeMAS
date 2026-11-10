@@ -18,9 +18,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from ....backends.searcher_trace import RUN_ID, trace
+from ....backends.search_errors import SearchBackendError
+from ....backends.searcher_trace import RUN_ID, STAGE, trace
 from ....backends.web_utils import canonical_url
-from .page_content import select_page_content
+from .page_content import resolve_evidence_quote, select_page_content
 from .searcher_prompts import REWRITE_PROMPT, SELECT_PROMPT, SUMMARIZE_PROMPT
 
 LLM = Callable[[str], Awaitable[Any]]
@@ -67,6 +68,7 @@ class WebSearcher:
 
     # 固定安全预算，避免修改冻结构造签名。自定义服务需在回调中设置更短传输超时。
     REQUEST_TIMEOUT_S = 35.0
+    MODEL_TIMEOUT_S = 35.0
     RUN_TIMEOUT_S = 180.0
     MAX_PAGE_CHARS = 12000
     MAX_FETCH_CHARS = 300000
@@ -83,6 +85,7 @@ class WebSearcher:
         """
         result = SearcherResult(sub_question=sub_question)
         token = RUN_ID.set(uuid.uuid4().hex[:12])
+        stage_token = STAGE.set({"name": "validate"})
         started = time.perf_counter()
         trace("searcher.start", sub_question=sub_question)
         try:
@@ -104,21 +107,42 @@ class WebSearcher:
             result.answer = ""
             result.sources = []
             result.error = f"searcher failed ({type(exc).__name__}); details redacted"
-            trace("searcher.error", error_type=type(exc).__name__)
+            # 只公开本模块已知的静态错误码，绝不回显外部回调的异常正文。
+            known = {"invalid source IDs", "invalid summary", "answer without sources",
+                     "answer citations mismatch", "invalid evidence", "unsupported evidence",
+                     "missing evidence", "incomplete model response", "invalid model output",
+                     "expected JSON object", "invalid queries", "invalid page content"}
+            reason = ("invalid_json" if isinstance(exc, json.JSONDecodeError) else
+                      "timeout" if isinstance(exc, TimeoutError) else
+                      str(exc).replace(" ", "_") if type(exc) is ValueError and str(exc) in known
+                      else "external_or_validation_error")
+            result.error += f"; stage={STAGE.get()['name']}; reason={reason}"
+            if isinstance(exc, SearchBackendError):
+                reason = exc.reason
+                result.error = (f"searcher failed ({type(exc).__name__}); details redacted; "
+                                f"stage={STAGE.get()['name']}; reason={reason}")
+                if exc.http_status is not None:
+                    result.error += f"; http_status={exc.http_status}"
+            trace("searcher.error", error_type=type(exc).__name__,
+                  stage=STAGE.get()["name"], reason=reason,
+                  http_status=exc.http_status if isinstance(exc, SearchBackendError) else None)
         finally:
             trace("searcher.end", status=result.status, pages_read=result.pages_read,
                   prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
                   elapsed_s=round(time.perf_counter() - started, 3))
             RUN_ID.reset(token)
+            STAGE.reset(stage_token)
         return result
 
-    async def _call(self, fn: Callable, *args: Any) -> Any:
-        return await asyncio.wait_for(fn(*args), timeout=self.REQUEST_TIMEOUT_S)
+    async def _call(self, fn: Callable, *args: Any, timeout: float | None = None) -> Any:
+        return await asyncio.wait_for(fn(*args), timeout=(
+            self.REQUEST_TIMEOUT_S if timeout is None else timeout))
 
     async def _json(self, prompt: str, result: SearcherResult, stage: str) -> dict:
+        STAGE.get()["name"] = stage
         started = time.perf_counter()
-        trace("model.start", stage=stage, prompt_chars=len(prompt))
-        response = await self._call(self.llm, prompt)
+        trace("model.start", stage=stage, prompt_chars=len(prompt), prompt=prompt)
+        response = await self._call(self.llm, prompt, timeout=self.MODEL_TIMEOUT_S)
         # 支持既有 APIGenResult/GenResult，及离线裸字符串回调。
         result.prompt_tokens += int(getattr(response, "n_prompt_pos", 0))
         result.completion_tokens += int(getattr(response, "n_gen_tokens", 0))
@@ -172,6 +196,7 @@ class WebSearcher:
             if len(result.queries) >= self.max_queries:
                 break
         started = time.perf_counter()
+        STAGE.get()["name"] = "search"
         trace("search.start", queries=result.queries, topk=self.topk)
         rows = await self._call(self.search, list(result.queries), self.topk)
         if not isinstance(rows, list):
@@ -203,6 +228,7 @@ class WebSearcher:
         pages = {}
         raw_pages = {}
         for sid in ids:
+            STAGE.get()["name"] = "fetch"
             started = time.perf_counter()
             trace("fetch.start", source_id=sid, url=candidates[sid].url)
             content = await self._call(self.fetch, candidates[sid].url)
@@ -216,6 +242,7 @@ class WebSearcher:
                                        scan_limit=self.MAX_FETCH_CHARS)
             trace("fetch.content", source_id=sid, url=candidates[sid].url,
                   received_chars=len(content), supplied_chars=len(page.text),
+                  raw_content=raw_pages[sid], supplied_content=page.text,
                   truncated=len(content) > len(page.text), content_preview=page.text[:500],
                   scanned_chars=page.scanned_chars, navigation_chars=page.navigation_chars,
                   selected_spans=page.spans, strategy="lead_and_diverse_visible_terms_v2",
@@ -248,9 +275,13 @@ class WebSearcher:
             if not isinstance(item, dict):
                 raise ValueError("invalid evidence")
             sid, quote = item.get("source_id"), item.get("quote")
-            if (not isinstance(sid, str) or sid not in ids or not isinstance(quote, str)
-                    or not quote.strip() or quote not in pages[sid] or quote not in raw_pages[sid]):
+            if not isinstance(sid, str) or sid not in ids or not isinstance(quote, str):
                 raise ValueError("unsupported evidence")
+            original_quote = resolve_evidence_quote(quote, pages[sid], raw_pages[sid])
+            if original_quote is None:
+                raise ValueError("unsupported evidence")
+            trace("evidence.verified", source_id=sid, quote=quote,
+                  original_quote=original_quote, formatting_mapped=quote != original_quote)
             verified.add(sid)
         if verified != set(ids):
             raise ValueError("missing evidence")
@@ -259,3 +290,26 @@ class WebSearcher:
         result.answer = re.sub(r"\[(S[^\]\s]*)\]",
                                lambda match: f"[{renumber[match[1]]}]", answer.strip())
         result.sources = [candidates[sid] for sid in ids]
+
+
+def make_web_searcher(*, llm: LLM, engine: str = "tavily", topk: int = 3,
+                      max_queries: int = 3, max_read: int = 3) -> WebSearcher:
+    """按 IFACE v1.7 组装真实检索器；只构造，不调用模型、搜索或抓取。
+
+    llm由调用方提供异步回调；不创建或替换模型。Tavily凭据由后端从
+    TAVILY_API_KEY读取。未实现的引擎和非法预算在构造时显式失败。
+    """
+    if engine != "tavily":
+        raise ValueError("make_web_searcher currently supports only engine='tavily'")
+    if not callable(llm):
+        raise TypeError("make_web_searcher requires an async llm callable")
+    for name, value, limit in (("topk", topk, 10), ("max_queries", max_queries, 3),
+                               ("max_read", max_read, 10)):
+        if type(value) is not int or not 1 <= value <= limit:
+            raise ValueError(f"{name} must be an integer between 1 and {limit}")
+
+    from ....backends.tavily_backend import TavilyBackend
+
+    backend = TavilyBackend()
+    return WebSearcher(llm=llm, search=backend.search, fetch=backend.fetch,
+                       topk=topk, max_queries=max_queries, max_read=max_read)

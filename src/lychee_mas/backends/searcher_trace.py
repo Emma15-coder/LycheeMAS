@@ -5,12 +5,36 @@ import json
 import logging
 import os
 import re
+from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 LOGGER = logging.getLogger("lychee_mas.mindsearch.trace")
 RUN_ID: ContextVar[str] = ContextVar("searcher_run_id", default="")
+STAGE: ContextVar[dict] = ContextVar("searcher_stage")
+
+
+@contextmanager
+def trace_file(path: Path, *, enabled: bool = False):
+    """显式启用的脱敏诊断文件；关闭后恢复logger，避免重复运行累积handler。"""
+    if not enabled:
+        yield
+        return
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    os.fchmod(fd, 0o600)
+    previous = LOGGER.level
+    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+        handler = logging.StreamHandler(stream)
+        LOGGER.addHandler(handler)
+        LOGGER.setLevel(logging.INFO)
+        try:
+            yield
+        finally:
+            LOGGER.removeHandler(handler)
+            handler.close()
+            LOGGER.setLevel(previous)
 
 
 def redact(value: str) -> str:

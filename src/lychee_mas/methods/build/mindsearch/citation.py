@@ -6,7 +6,7 @@
 
 设计：
 - URL 归一化（去 fragment、去尾斜杠、host 小写、http/https 视同）后再比对；
-- 没有任何 sources 时（全部检索失败/空结果）不强制引用（reason="no_sources"）；
+- 没有任何 sources 时（全部检索失败/空结果）不强制引用，但仍拒绝未知 URL；
 - 有 sources 但答案无引用 -> no_citation；引用了未知 URL -> unknown_urls。
 """
 from __future__ import annotations
@@ -89,11 +89,11 @@ def check_citations(answer: str, dag: Any, *, require_citation: bool = True) -> 
     - 有引用且全部可追溯 -> ok
     - 引用了未知 URL -> unknown_urls（不通过）
     - 有 sources 但完全没引用，且 require_citation -> no_citation（不通过）
-    - 一条 sources 都没有（检索全失败/为空）-> no_sources（通过，交给 giveup 路径处理）
+    - 一条 sources 都没有且未引用 URL -> no_sources（通过，交给 giveup 路径处理）
     """
     known = dag_sources(dag)
     cited = extract_urls(answer)
-    if not known:
+    if not known and not cited:
         return CitationReport(ok=True, reason="no_sources", cited=cited, known=[])
     known_lower = {u.lower() for u in known}
     unknown = [u for u in cited if u not in known and u.lower() not in known_lower]

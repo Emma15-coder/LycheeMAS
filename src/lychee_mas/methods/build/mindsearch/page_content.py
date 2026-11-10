@@ -126,3 +126,45 @@ def select_page_content(raw: str, query: str, *, budget: int = 12000,
         spans.append((start, end))
         remaining -= end - start + separator
     return PageContent("\n\n".join(pieces), spans, len(content), navigation_chars)
+
+
+def resolve_evidence_quote(quote: str, supplied: str, raw: str) -> str | None:
+    """将可见文字摘录映射回连续原文；仅处理链接包装和不换行空格。
+
+    不做模糊匹配、不删标点或词语。返回值必须同时是模型输入和原始正文的连续子串，
+    因此不能用跨片段拼接或语义相近的句子冒充原文。
+    """
+    if not quote.strip():
+        return None
+    if quote in supplied and quote in raw:
+        return quote
+    chars: list[str] = []
+    offsets: list[int] = []
+    cursor = 0
+    for match in _LINK.finditer(supplied):
+        if match[0].startswith("!"):
+            continue
+        for i in range(cursor, match.start()):
+            chars.append(supplied[i])
+            offsets.append(i)
+        label_start = match.start() + 1
+        label_end = supplied.index("](", label_start, match.end())
+        for i in range(label_start, label_end):
+            chars.append(supplied[i])
+            offsets.append(i)
+        cursor = match.end()
+    for i in range(cursor, len(supplied)):
+        chars.append(supplied[i])
+        offsets.append(i)
+
+    def spaces(text: str) -> str:
+        return text.replace("\u00a0", " ").replace("\u202f", " ")
+
+    visible, needle = spaces("".join(chars)), spaces(quote)
+    start = visible.find(needle)
+    while start >= 0:
+        original = supplied[offsets[start]:offsets[start + len(needle) - 1] + 1]
+        if original in raw:
+            return original
+        start = visible.find(needle, start + 1)
+    return None

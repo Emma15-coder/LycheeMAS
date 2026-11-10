@@ -8,10 +8,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any
 
+from .search_errors import SearchBackendError
 from .searcher_trace import trace
 
 
@@ -46,21 +48,39 @@ class TavilyBackend:
             data=json.dumps(body).encode("utf-8"),
             headers={"Authorization": f"Bearer {self._key}",
                      "Content-Type": "application/json"}, method="POST")
+        started = time.perf_counter()
         try:
             with self._opener.open(request, timeout=self.timeout) as response:
                 if response.status != 200:
-                    raise ValueError("non-200 response")
+                    raise SearchBackendError("http_error", http_status=response.status)
                 raw = response.read(2_000_001)
             if len(raw) > 2_000_000:
-                raise ValueError("response exceeds byte budget")
+                raise SearchBackendError("response_too_large")
             data = json.loads(raw.decode("utf-8"))
             if not isinstance(data, dict) or "error" in data or "detail" in data:
-                raise ValueError("invalid response")
+                raise SearchBackendError("invalid_response")
             return data
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"Tavily HTTP {exc.code}; details redacted") from None
-        except Exception as exc:
-            raise RuntimeError(f"Tavily {type(exc).__name__}; details redacted") from None
+            error = SearchBackendError("http_error", http_status=exc.code)
+            exc.close()
+        except SearchBackendError as exc:
+            error = exc
+        except TimeoutError:
+            error = SearchBackendError("network_timeout")
+        except urllib.error.URLError as exc:
+            error = SearchBackendError("network_timeout" if isinstance(exc.reason, TimeoutError)
+                                       else "connection_error")
+        except (ConnectionError, OSError):
+            error = SearchBackendError("connection_error")
+        except (json.JSONDecodeError, UnicodeError):
+            error = SearchBackendError("invalid_json")
+        except Exception:
+            error = SearchBackendError("unexpected_error")
+        operation = endpoint if endpoint in ("search", "extract") else "unknown"
+        trace("tavily.error", operation=operation,
+              reason=error.reason, http_status=error.http_status,
+              elapsed_s=round(time.perf_counter() - started, 3))
+        raise error from None
 
     async def search(self, queries: list[str], topk: int) -> list[dict]:
         if not 1 <= len(queries) <= 3 or type(topk) is not int or not 1 <= topk <= 10:
@@ -77,12 +97,12 @@ class TavilyBackend:
             })
             results = data.get("results")
             if not isinstance(results, list):
-                raise RuntimeError("Tavily search response missing results")
+                raise SearchBackendError("invalid_response")
             for item in results[:topk]:
                 if not isinstance(item, dict) or any(
                     not isinstance(item.get(k), str) for k in ("url", "title", "content")
                 ):
-                    raise RuntimeError("Tavily search item has invalid fields")
+                    raise SearchBackendError("invalid_response")
                 rows.append({"url": item["url"], "title": item["title"][:500],
                              "snippet": item["content"][:1500]})
         return rows
@@ -97,16 +117,16 @@ class TavilyBackend:
             "urls": [url], "extract_depth": "basic", "format": "markdown",
         })
         if data.get("failed_results"):
-            raise RuntimeError("Tavily extract failed; details redacted")
+            raise SearchBackendError("extract_failed")
         rows = data.get("results")
         if not isinstance(rows, list):
-            raise RuntimeError("Tavily extract response missing results")
+            raise SearchBackendError("invalid_response")
         if not rows:
             return ""
         if (len(rows) != 1 or not isinstance(rows[0], dict)
                 or canonical_url(rows[0].get("url")) != canonical_url(url)
                 or not isinstance(rows[0].get("raw_content"), str)):
-            raise RuntimeError("Tavily extract response mismatch")
+            raise SearchBackendError("invalid_response")
         content = rows[0]["raw_content"]
         trace("tavily.extract", url=url, raw_chars=len(content),
               returned_chars=min(len(content), self.max_page_chars),

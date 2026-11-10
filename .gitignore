@@ -40,3 +40,6 @@ docs/assets/benchmark-structure.svg
 # Claude Code 本地状态（会话/worktrees/本地配置，不共享）
 .claude/
 **/.claude/settings.local.json
+
+# 个人参考指南
+/指南-团队协作开发-v3.md

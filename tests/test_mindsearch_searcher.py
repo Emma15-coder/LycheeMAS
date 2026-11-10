@@ -312,3 +312,136 @@ def test_trace_redacts_response_preview_url_and_environment_keys(monkeypatch, ca
         assert secret not in logs
     assert "[REDACTED]" in logs
     trace_events(caplog)  # 脱敏后仍是合法JSON，防止引号/换行破坏结构
+
+
+@pytest.mark.parametrize("fault,stage,reason", [
+    ("quote", "summarize", "unsupported_evidence"),
+    ("ids", "select", "invalid_source_IDs"),
+    ("json", "rewrite", "invalid_json"),
+    ("timeout", "search", "timeout"),
+    ("external", "search", "external_or_validation_error"),
+])
+def test_diagnostic_reason_is_specific_and_external_errors_stay_private(fault, stage, reason):
+    fake = Fake()
+    if fault == "quote":
+        fake.outputs[2] = summary(evidence=[{"source_id": "S1", "quote": "invented"}])
+    elif fault == "ids":
+        fake.outputs[1] = {"source_ids": ["S99"]}
+    searcher = fake.searcher()
+    if fault == "json":
+        async def invalid(prompt):
+            return "not json"
+        searcher.llm = invalid
+    if fault in ("timeout", "external"):
+        async def failed(queries, topk):
+            if fault == "timeout":
+                raise TimeoutError("private-provider-message")
+            raise ValueError("private-provider-message")
+        searcher.search = failed
+    result = asyncio.run(searcher.run("q"))
+    assert result.status == "error"
+    assert f"stage={stage}; reason={reason}" in result.error
+    assert "private-provider-message" not in result.error
+
+
+def test_trace_file_preserves_replay_material_and_restores_logger(tmp_path, monkeypatch):
+    from lychee_mas.backends.searcher_trace import LOGGER, redact_fields, trace_file
+
+    monkeypatch.setenv("TEST_API_KEY", "private-key-for-test")
+    fake = Fake(body=TEXT + " private-key-for-test")
+    path = tmp_path / "trace.jsonl"
+    previous = LOGGER.level
+    handlers = list(LOGGER.handlers)
+    with trace_file(path, enabled=True):
+        assert asyncio.run(fake.searcher().run("q")).is_ok()
+    assert LOGGER.level == previous and LOGGER.handlers == handlers
+    assert path.stat().st_mode & 0o777 == 0o600
+    text = path.read_text()
+    assert "private-key-for-test" not in text
+    events = [json.loads(line) for line in text.splitlines()]
+    starts = [e for e in events if e["event"] == "model.start"]
+    assert [e["prompt"] for e in starts] == redact_fields(fake.prompts)
+    page = next(e for e in events if e["event"] == "fetch.content")
+    assert TEXT in page["raw_content"] and TEXT in page["supplied_content"]
+    assert len({e["run_id"] for e in events}) == 1
+
+
+def test_captured_real_quotes_with_markdown_and_nonbreaking_spaces():
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / 'fixtures/mindsearch_quote_formatting.json'
+    cases = json.loads(fixture.read_text())
+    for case in cases:
+        quote = case['summary']['evidence'][0]['quote']
+        assert quote not in case['excerpt']  # 原始实现的失败条件
+        fake = Fake(outputs=[{'queries': ['test']}, {'source_ids': ['S1']}, case['summary']],
+                    body=case['excerpt'])
+        result = asyncio.run(fake.searcher().run('test'))
+        assert result.is_ok(), result.error
+        # 有格式噪声仍不能接受改写事实或替换实体。
+        fake.outputs[2] = summary(evidence=[{'source_id': 'S1', 'quote': quote + ' invented'}])
+        fake.prompts.clear()
+        assert asyncio.run(fake.searcher().run('test')).status == 'error'
+
+
+@pytest.mark.parametrize('quote,supplied,raw', [
+    ('Darvel, Scotland', '[Darvel](https://example.org), England',
+     '[Darvel](https://example.org), England'),
+    ('born in Scotland', 'born in\n\nScotland', 'born in another place. Scotland'),
+    ('born in Scotland', 'born in Scotland', 'born in another place. Scotland'),
+    ('1812', '1813', '1813'),
+])
+def test_formatting_mapping_never_accepts_changed_facts_or_stitched_text(quote, supplied, raw):
+    from lychee_mas.methods.build.mindsearch.page_content import resolve_evidence_quote
+
+    assert resolve_evidence_quote(quote, supplied, raw) is None
+
+
+def test_model_timeout_is_separate_from_search_timeout():
+    async def scenario():
+        fake = Fake()
+        searcher = fake.searcher()
+        searcher.REQUEST_TIMEOUT_S = 0.001
+        searcher.MODEL_TIMEOUT_S = 1
+        model = fake.llm
+
+        async def delayed(prompt):
+            await asyncio.sleep(0.01)
+            return await model(prompt)
+
+        searcher.llm = delayed
+        assert (await searcher.run('q')).is_ok()
+        fake.prompts.clear()
+        searcher.MODEL_TIMEOUT_S = 0.001
+        result = await searcher.run('q')
+        assert result.status == 'error' and 'stage=rewrite; reason=timeout' in result.error
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('stage,reason,status', [
+    ('search', 'http_error', 429),
+    ('search', 'connection_error', None),
+    ('search', 'invalid_json', None),
+    ('fetch', 'extract_failed', None),
+    ('fetch', 'network_timeout', None),
+])
+def test_backend_safe_metadata_reaches_searcher_result_and_trace(caplog, stage, reason, status):
+    from lychee_mas.backends.search_errors import SearchBackendError
+
+    caplog.set_level('INFO', logger='lychee_mas.mindsearch.trace')
+    fake = Fake()
+    searcher = fake.searcher()
+
+    async def fail(*args):
+        raise SearchBackendError(reason, http_status=status)
+
+    setattr(searcher, stage, fail)
+    result = asyncio.run(searcher.run('q'))
+    assert result.status == 'error' and result.answer == '' and result.sources == []
+    assert f'stage={stage}; reason={reason}' in result.error
+    event = next(e for e in trace_events(caplog) if e['event'] == 'searcher.error')
+    assert event['stage'] == stage and event['reason'] == reason
+    assert event['http_status'] == status
+    if status:
+        assert f'http_status={status}' in result.error

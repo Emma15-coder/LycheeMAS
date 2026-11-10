@@ -238,3 +238,50 @@ def test_extract_raw_bound_does_not_grow_model_budget(monkeypatch):
     assert len(asyncio.run(b.fetch("https://x.org/"))) == 300000
     with pytest.raises(ValueError):
         TavilyBackend(max_page_chars=300001)
+
+
+@pytest.mark.parametrize('payload,reason,status', [
+    (urllib.error.HTTPError('https://x', 429, 'test-secret', {}, None), 'http_error', 429),
+    (urllib.error.HTTPError('https://x', 503, 'test-secret', {}, None), 'http_error', 503),
+    (TimeoutError('test-secret'), 'network_timeout', None),
+    (urllib.error.URLError(TimeoutError('test-secret')), 'network_timeout', None),
+    (urllib.error.URLError('test-secret'), 'connection_error', None),
+    (ConnectionResetError('test-secret'), 'connection_error', None),
+    (RuntimeError('test-secret'), 'unexpected_error', None),
+    ({'detail': 'test-secret'}, 'invalid_response', None),
+    ({'results': 'test-secret'}, 'invalid_response', None),
+    ({'results': [{'url': 'https://x', 'title': 'x'}]}, 'invalid_response', None),
+])
+def test_tavily_safe_error_categories_stop_after_first_request(
+    monkeypatch, payload, reason, status,
+):
+    from lychee_mas.backends.search_errors import SearchBackendError
+
+    b = backend(monkeypatch, [payload])
+    with pytest.raises(SearchBackendError) as exc:
+        asyncio.run(b.search(['q1', 'q2'], 3))
+    assert exc.value.reason == reason and exc.value.http_status == status
+    assert 'test-secret' not in str(exc.value)
+    assert len(b._opener.calls) == 1
+
+
+@pytest.mark.parametrize('raw,reason', [
+    (b'not json test-secret', 'invalid_json'),
+    (b'\xff', 'invalid_json'),
+    (b'[]', 'invalid_response'),
+    (b'x' * 2_000_001, 'response_too_large'),
+])
+def test_tavily_bad_response_bytes_are_classified(monkeypatch, raw, reason):
+    from lychee_mas.backends.search_errors import SearchBackendError
+
+    b = backend(monkeypatch, [])
+
+    class RawTransport:
+        def open(self, request, timeout):
+            return Response(raw)
+
+    b._opener = RawTransport()
+    with pytest.raises(SearchBackendError) as exc:
+        b._post('search', {'query': 'q'})
+    assert exc.value.reason == reason
+    assert 'test-secret' not in str(exc.value)

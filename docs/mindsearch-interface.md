@@ -55,9 +55,9 @@ prerun（MASPO apply）会**原地改写**它，所以它属于图契约；searc
 | `planner.py`（循环 + 上限 + 并发 + finish 合法性 + 引用校验 + 去重）                     | **已落地**         | A：`build_mindsearch_planner`  |
 | `citation.py`（引用级校验）                                                              | **已落地**         | 同上                           |
 | `scripts/run_mindsearch.py`（三臂 + 落盘 + 指标）                                        | **已落地**         | A：同上                        |
-| `WebSearcher.run()` 四步实现                                                            | 未落地             | B：`build_mindsearch_searcher` |
-| `make_web_searcher` 工厂 + `backends/tavily_search.py`                                  | 未落地             | B：同上                        |
-| `searcher_prompts.py`                                                                   | 未落地             | B：同上                        |
+| `WebSearcher.run()` 四步实现                                                            | 已落地             | B：`build_mindsearch_searcher` |
+| `make_web_searcher` 工厂 + `backends/tavily_backend.py`                                 | 已落地             | B：同上                        |
+| `searcher_prompts.py`                                                                   | 已落地             | B：同上                        |
 | 3 个 benchmark loader + 注册                                                            | 未落地             | B：`eval_mindsearch`           |
 | `analyze_mindsearch_run.py` / `render_dag.py`                                           | 未落地             | B：同上                        |
 
@@ -432,3 +432,11 @@ make lint && make test && make selfcheck                      # 三件套
 | `test_mind_search_answer.py` 与 `test_mindsearch_answer.py` 并存 | 手误新建                | 命名统一 `test_mindsearch_*`；pytest 会同时收集两个           |
 | 文档只存到 §3.1（截断）                                          | 从对话复制长文          | 落盘后 `grep -c '^## '` 自检节数                              |
 | 顶层 `import langgraph` 风险                                     | 图省事写在模块头        | 只在函数内 import；`make selfcheck` 必须 `HEAVY LOADED: NONE` |
+
+#### 可选运行统计（2026-11-10，兼容性增量）
+
+MindSearchState和逐题产物增加`planner_prompt_tokens`、`planner_completion_tokens`、
+`searcher_prompt_tokens`、`searcher_completion_tokens`、`queries_count`、`pages_read`。
+原有总token字段及Searcher/DAG冻结签名不变。统计包含失败尝试已返回的usage；
+queries_count为累计查询批次条目数，pages_read为累计取得非空正文次数，均不跨尝试去重。
+超时无usage的费用及旧checkpoint历史细分不能反推，完整口径见mindsearch-searcher.md。
