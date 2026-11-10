@@ -20,7 +20,11 @@
     },
     "huggingface": {
       "env": "LYCHEE_AIME_2024_HF_ID",
-      "default_ids": ["HuggingFaceH4/aime_2024", "Maxwell-Jia/AIME_2024", "AI-MO/aimo-validation-aime"]
+      "default_ids": [
+        "HuggingFaceH4/aime_2024",
+        "Maxwell-Jia/AIME_2024",
+        "AI-MO/aimo-validation-aime"
+      ]
     },
     "other_defaults": [],
     "fallback_files": []
@@ -65,7 +69,10 @@
     },
     "huggingface": {
       "env": "LYCHEE_MEDQA_HF_ID",
-      "default_ids": ["GBaker/MedQA-USMLE-4-options", "GBaker/MedQA-USMLE-4-options-hf"]
+      "default_ids": [
+        "GBaker/MedQA-USMLE-4-options",
+        "GBaker/MedQA-USMLE-4-options-hf"
+      ]
     },
     "other_defaults": [
       {
@@ -150,7 +157,11 @@
       {
         "provider": "huggingface_direct",
         "repo_id": "ZBox008003/AFTraj",
-        "files": ["aftraj_safe.parquet", "aftraj_unsafe.parquet", "splits_test.json"],
+        "files": [
+          "aftraj_safe.parquet",
+          "aftraj_unsafe.parquet",
+          "splits_test.json"
+        ],
         "strict": true,
         "purpose": "complete minimal files required by AFTraj loaders"
       }
@@ -215,10 +226,36 @@
       {
         "provider": "huggingface_direct_listed",
         "repo_id": "juliensimon/open-agent-traces",
-        "patterns": ["data/**/*.parquet", "data/*.parquet", "README*", ".gitattributes"],
+        "patterns": [
+          "data/**/*.parquet",
+          "data/*.parquet",
+          "README*",
+          ".gitattributes"
+        ],
         "strict": false,
         "purpose": "listed-file fallback; loader validates parquet files under data/"
       }
     ]
+  },
+  "bamboogle": {
+    "benchmark_source": "Bamboogle (Press et al., 2022)",
+    "huggingface": {
+      "env": "LYCHEE_BAMBOOGLE_HF_ID",
+      "default_ids": ["chiayewken/bamboogle"]
+    }
+  },
+  "musique": {
+    "benchmark_source": "MuSiQue (Trivedi et al., 2022)",
+    "huggingface": {
+      "env": "LYCHEE_MUSIQUE_HF_ID",
+      "default_ids": ["dgslibisey/Musique"]
+    }
+  },
+  "hotpotqa": {
+    "benchmark_source": "HotpotQA (Yang et al., 2018)",
+    "huggingface": {
+      "env": "LYCHEE_HOTPOTQA_HF_ID",
+      "default_ids": ["hotpotqa/hotpot_qa"]
+    }
   }
 }

@@ -106,7 +106,7 @@ sg.add_node(name, node_fn, metadata={"agent_spec": spec})   # spec: core.types.A
 
 ## 5. 评测体系（`eval/`，顶层独立）
 
-- **benchmark（20 个注册名）**：文本推理/知识 `gsm8k, aime_2024, math500, medqa, arc_easy, openbookqa, locomo10`；代码/通用助理 `human_eval, gaia_validation(_level_1..3)`；MAS 轨迹分析 `aftraj_audit(_test), agent_collab_{idr,rtd,cpr,clc}, mast_failure, open_agent_traces`。统一记录格式 `{task, kind, question, gold, context}`；数据加载惰性；入口 `benchmarks.load(task, n)` / `prepare(task)`。
+- **benchmark（27 个注册名）**：文本推理/知识 `gsm8k, aime_2024, math500, medqa, arc_easy, openbookqa, locomo10`；多跳检索问答 `bamboogle, musique_{2,3,4}hop, hotpotqa_{easy,medium,hard}`；代码/通用助理 `human_eval, gaia_validation(_level_1..3)`；MAS 轨迹分析 `aftraj_audit(_test), agent_collab_{idr,rtd,cpr,clc}, mast_failure, open_agent_traces`。统一记录格式 `{task, kind, question, gold, context}`；数据加载惰性；入口 `benchmarks.load(task, n)` / `prepare(task)`。
 - **推理 / 打分分离**：实验脚本只推理落盘（samples + config 快照）；`scripts/analyze_benchmark_run.py --score-predictions` 事后打分。
 - **pass@K**：`run_processed(method="parallel", k=K)` 采样 K 次；打分侧 `metrics.aggregate_samples` 按 case 聚合（pass@1 = 各 case K 份均分再平均；pass@K = best-of-K 再平均）。
 - **指标**：`kind` 覆盖 mc / exact / aime（数值+符号等价）/ f1 / human_eval / gaia / MAS 专用族；评测同时报告 accuracy / token / latency。注意：免 gold 的判官偏好优化会漂移答案表面形式（Unicode 极简写法等），评测端需写法鲁棒（MASPO 复现的方法学发现）。
@@ -131,7 +131,7 @@ sg.add_node(name, node_fn, metadata={"agent_spec": spec})   # spec: core.types.A
 | postrun    | `credit_assigner`    | —                                                                  | `attribution_guided`                           |
 | postrun    | `trainer`            | —                                                                  | —（RL 线待接）                                 |
 | postrun    | `post_run_optimizer` | —                                                                  | `attribution`, `train`（图闭环桩）             |
-| —          | `benchmark`          | 20 个（§5）                                                        | —                                              |
+| —          | `benchmark`          | 27 个（§5）                                                        | —                                              |
 
 > 桩能被 `REGISTRY.list` 看到是有意为之：占好名字、让消融矩阵可见。组件状态变化时同步更新本表。
 

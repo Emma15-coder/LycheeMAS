@@ -8,6 +8,7 @@ preparation live in sibling modules, while this file only exposes public
 
 from __future__ import annotations
 
+import functools
 from typing import Callable, Dict, List, Optional
 
 from ...core.registry import REGISTRY
@@ -49,6 +50,7 @@ from .locomo10 import load_locomo10, prepare_locomo10
 from .mast_data import ensure_source as ensure_mast_source
 from .mast_data import load_mast_failure
 from .math500 import load_math500, prepare_math500
+from .mindsearch_qa import load_bamboogle, load_hotpotqa, load_musique
 from .open_agent_traces import ensure_source as ensure_open_agent_traces_source
 from .open_agent_traces import load_open_agent_traces
 
@@ -423,6 +425,13 @@ def prepare(task: str, force: bool = False, source: Optional[str] = None) -> str
 
 
 LOADERS = {
+    "bamboogle": load_bamboogle,
+    "musique_2hop": functools.partial(load_musique, hops=2),
+    "musique_3hop": functools.partial(load_musique, hops=3),
+    "musique_4hop": functools.partial(load_musique, hops=4),
+    "hotpotqa_easy": functools.partial(load_hotpotqa, level="easy"),
+    "hotpotqa_medium": functools.partial(load_hotpotqa, level="medium"),
+    "hotpotqa_hard": functools.partial(load_hotpotqa, level="hard"),
     "gsm8k": load_gsm8k,
     "aime_2024": load_aime_2024,
     "math500": load_math500,
