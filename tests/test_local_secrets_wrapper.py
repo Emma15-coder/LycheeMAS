@@ -124,3 +124,30 @@ def test_wrapper_does_not_accept_arbitrary_commands(wrapper, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         wrapper.main()
     assert exc.value.code == 2
+
+
+def test_default_location_is_project_env(wrapper):
+    assert wrapper._location() == wrapper.ROOT / ".env"
+
+
+def test_project_setup_preserves_directory_permissions(wrapper, tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir(mode=0o755)
+    monkeypatch.setattr(wrapper, "ROOT", project)
+    monkeypatch.setattr(wrapper.getpass, "getpass", lambda prompt: "fake-key")
+    wrapper._setup(wrapper._location())
+    assert stat.S_IMODE(project.stat().st_mode) == 0o755
+    assert stat.S_IMODE((project / ".env").stat().st_mode) == 0o600
+    assert wrapper._load(project / ".env") == dict.fromkeys(wrapper.KEY_NAMES, "fake-key")
+
+
+def test_group_writable_project_is_rejected(wrapper, tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir(mode=0o700)
+    monkeypatch.setattr(wrapper, "ROOT", project)
+    path = project / ".env"
+    path.write_text("SILICONFLOW_API_KEY=fake\nTAVILY_API_KEY=fake\n")
+    path.chmod(0o600)
+    project.chmod(0o777)
+    with pytest.raises(ValueError):
+        wrapper._load(path)

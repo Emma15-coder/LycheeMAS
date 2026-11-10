@@ -47,5 +47,13 @@ def test_no_sources_passes():
     dag = TaskDAG("q")
     a = dag.add_node("A")
     dag.mark_done(a, "ans")                       # 没有 sources（检索失败/为空）
-    rep = check_citations("来源：https://whatever.com", dag)
+    rep = check_citations("未能确认：检索没有获得依据。", dag)
     assert rep.ok and rep.reason == "no_sources"
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_no_sources_does_not_legalize_unknown_url(required):
+    rep = check_citations("来源：https://whatever.com", TaskDAG("q"),
+                          require_citation=required)
+    assert not rep.ok and rep.reason == "unknown_urls"
+    assert rep.unknown == ["https://whatever.com"] and not rep.known

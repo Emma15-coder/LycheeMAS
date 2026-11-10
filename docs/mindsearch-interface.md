@@ -55,9 +55,9 @@ prerun（MASPO apply）会**原地改写**它，所以它属于图契约；searc
 | `planner.py`（循环 + 上限 + 并发 + finish 合法性 + 引用校验 + 去重）                     | **已落地**         | A：`build_mindsearch_planner`  |
 | `citation.py`（引用级校验）                                                              | **已落地**         | 同上                           |
 | `scripts/run_mindsearch.py`（三臂 + 落盘 + 指标）                                        | **已落地**         | A：同上                        |
-| `WebSearcher.run()` 四步实现                                                            | 未落地             | B：`build_mindsearch_searcher` |
-| `make_web_searcher` 工厂 + `backends/tavily_search.py`                                  | 未落地             | B：同上                        |
-| `searcher_prompts.py`                                                                   | 未落地             | B：同上                        |
+| `WebSearcher.run()` 四步实现                                                            | 已落地             | B：`build_mindsearch_searcher` |
+| `make_web_searcher` 工厂 + `backends/tavily_backend.py`                                 | 已落地             | B：同上                        |
+| `searcher_prompts.py`                                                                   | 已落地             | B：同上                        |
 | 3 个 benchmark loader + 注册                                                            | 未落地             | B：`eval_mindsearch`           |
 | `analyze_mindsearch_run.py` / `render_dag.py`                                           | 未落地             | B：同上                        |
 

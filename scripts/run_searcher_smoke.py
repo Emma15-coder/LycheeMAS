@@ -20,16 +20,20 @@ class _SecretConfigError(ValueError):
 
 
 def _location() -> Path:
-    return Path.home() / ".config" / "lychee-mas" / "secrets.env"
+    return ROOT / ".env"
 
 
 def _check_directory(directory: Path) -> None:
     info = directory.lstat()
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-            or stat.S_IMODE(info.st_mode) != 0o700):
-        raise _SecretConfigError("密钥目录必须由当前用户拥有、非符号链接且权限为700。")
-    if directory.resolve().is_relative_to(ROOT):
-        raise _SecretConfigError("密钥目录必须位于项目外。")
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise _SecretConfigError("密钥目录必须由当前用户拥有且不是符号链接。")
+    mode = stat.S_IMODE(info.st_mode)
+    if directory.resolve() == ROOT.resolve():
+        # 项目根目录通常755；不为密钥修改整个项目目录权限。
+        if mode & 0o022:
+            raise _SecretConfigError("项目目录不能允许组或其他用户写入。")
+    elif mode != 0o700:
+        raise _SecretConfigError("独立密钥目录权限必须为700。")
 
 
 def _validate_value(value: str) -> None:
@@ -63,8 +67,6 @@ def _load(path: Path) -> dict[str, str]:
 
 
 def _setup(path: Path) -> None:
-    if path.parent.resolve().is_relative_to(ROOT):
-        raise _SecretConfigError("密钥目录必须位于项目外。")
     # 无可用TTY时禁止getpass退化成明文输入。
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
@@ -76,7 +78,8 @@ def _setup(path: Path) -> None:
     info = path.parent.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
         raise _SecretConfigError("密钥目录所有者或类型无效。")
-    path.parent.chmod(0o700)
+    if path.parent.resolve() != ROOT.resolve():
+        path.parent.chmod(0o700)
     _check_directory(path.parent)
     if path.is_symlink():
         raise _SecretConfigError("拒绝覆盖符号链接。")
@@ -91,7 +94,7 @@ def _setup(path: Path) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    print("密钥已保存至 ~/.config/lychee-mas/secrets.env；目录700，文件600。")
+    print("密钥已保存；默认位置为项目根目录.env，文件权限600。")
 
 
 def _smoke(keys: dict[str, str]) -> None:

@@ -79,7 +79,9 @@ sg.add_node(name, node_fn, metadata={"agent_spec": spec})   # spec: core.types.A
 
 MindSearch 的独立检索模块已实现：查询改写 → URL去重 → 选页/抓取 → 带引用总结；
 Tavily Search/Extract与异步模型适配见 [Searcher运行说明](mindsearch-searcher.md)。
-Planner主循环仍未接入；构建器只提供静态外壳，不能视为完整MindSearch端到端实现。
+Planner主循环已合入；`make_web_searcher` 工厂已将 Tavily 接入端到端入口的 real 分支。
+完整 Planner + Searcher 离线联调已覆盖依赖、并发、来源、记账与失败路径
+（`tests/test_mindsearch_integration.py`）；完整真实端到端运行尚未验证。
 
 ### 4.2 prerun（运行前优化，`plugins/prerun/` × `methods/prerun/`）
 
