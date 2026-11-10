@@ -1,14 +1,17 @@
 """MindSearch 端到端实验入口（三臂：no_search / single_turn / mindsearch）。
 
 用法：
-  # 离线打通链路（不联网、不需要 key 以外的依赖）
-  PYTHONPATH=src python scripts/run_mindsearch.py --arm mindsearch --searcher stub --n 1
+  # 假检索器打通链路（模型仍真实调用，需要模型 Key；完全离线联调见 tests/）
+  PYTHONPATH=src python scripts/run_mindsearch.py --arm mindsearch \
+      --searcher stub --question "测试问题"
 
-  # 真实模型 + 真检索（需要 B 的 search_backend 已合入）
-  PYTHONPATH=src python scripts/run_mindsearch.py --arm mindsearch --searcher real --benchmark bamboogle --n 30
+  # 真实模型 + 真检索（自动加载项目.env）
+  PYTHONPATH=src python scripts/run_mindsearch.py --arm mindsearch \
+      --searcher real --question "埃菲尔铁塔位于哪个城市？"
 
 产物（runs/mindsearch/<task>/<arm>/<ts>/）：
-  predictions.jsonl / dag/<case>.json / dag/<case>.mmd / sources.jsonl / run_config.json / metrics.json
+  predictions.jsonl / dag/<case>.json / dag/<case>.mmd
+  sources.jsonl / run_config.json / metrics.json
 """
 from __future__ import annotations
 
@@ -16,17 +19,18 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import subprocess
-import sys
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 
-from lychee_mas.core.types import AgentSpec
+from lychee_mas.backends.local_env import checked_env_stream
+from lychee_mas.backends.searcher_trace import redact_fields, trace_file
 from lychee_mas.eval import benchmarks as BENCH
 from lychee_mas.eval import metrics as M
-from lychee_mas.methods.build.mindsearch import (MindSearchState, TaskDAG,
-                                                 planner_node_factory)
+from lychee_mas.methods.build.mindsearch import MindSearchState, TaskDAG, planner_node_factory
 from lychee_mas.methods.build.mindsearch.answer_format import format_answer
 from lychee_mas.methods.build.mindsearch.searcher import SearcherResult, SourceRef
 from lychee_mas.plugins import build_langgraph
@@ -46,6 +50,43 @@ SINGLE_TURN_PROMPT = """根据下面的检索结果回答问题。只依据检�
 检索结果（来源：{src}）：
 {evidence}
 """
+
+
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+COST_FIELDS = ("planner_prompt_tokens", "planner_completion_tokens",
+               "searcher_prompt_tokens", "searcher_completion_tokens",
+               "queries_count", "pages_read")
+
+
+def configure_api(args: argparse.Namespace) -> None:
+    """配置优先级：CLI > 进程环境 > 项目.env > 已验证服务默认值。"""
+    try:
+        with checked_env_stream(ENV_FILE, optional=True) as stream:
+            if stream is None:
+                env_loaded = False
+            else:
+                from dotenv import load_dotenv  # 配置功能按需导入，核心注册链不依赖它
+
+                env_loaded = load_dotenv(stream=stream, override=False)
+    except ImportError:
+        raise SystemExit("需要python-dotenv；请安装项目的config或searcher可选依赖。") from None
+    except (OSError, UnicodeError, ValueError):
+        raise SystemExit(
+            "项目.env读取失败；请检查格式、所有权和600权限（未显示敏感内容）。") from None
+    args.model = args.model or os.environ.get("LYCHEE_LLM_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash")
+    args.base_url = args.base_url or os.environ.get("LYCHEE_LLM_BASE_URL",
+                                                   "https://api.siliconflow.cn/v1")
+    args.api_key_env = (args.api_key_env or os.environ.get("LYCHEE_LLM_API_KEY_ENV")
+                        or ("LYCHEE_LLM_API_KEY" if os.environ.get("LYCHEE_LLM_API_KEY")
+                            else "SILICONFLOW_API_KEY"))
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.api_key_env):
+        raise SystemExit("--api-key-env必须是环境变量名称，不能填写密钥值。")
+    args.env_file_loaded = env_loaded
+    if not os.environ.get(args.api_key_env):
+        raise SystemExit("缺少指定模型密钥；请检查.env或--api-key-env对应的进程环境变量。")
+    if (args.arm != "no_search" and args.searcher == "real" and args.engine == "tavily"
+            and not os.environ.get("TAVILY_API_KEY")):
+        raise SystemExit("缺少 TAVILY_API_KEY；请配置项目.env或进程环境。")
 
 
 # LLM 调用计数（每题重置；用于框架指标 num_model_calls）
@@ -73,6 +114,9 @@ def build_llm(args: argparse.Namespace):
         timeout=args.timeout,
         temperature=args.temperature,
     )
+
+    # 关闭SDK自动重试；Planner的显式规划修正次数仍由规划参数控制。
+    backend.client = backend.client.with_options(max_retries=0)
 
     async def llm(prompt: str):
         _LLM_CALLS["n"] += 1
@@ -112,8 +156,12 @@ def build_searcher(llm, args: argparse.Namespace):
             "make_web_searcher(llm=..., engine=..., topk=..., max_queries=..., max_read=...)"
             "（IFACE v1.7，由 B 实现，尚未合入）。\n"
             "先用 --searcher stub 打通链路。")
-    return factory(llm=llm, engine=args.engine, topk=args.topk,
-                   max_queries=args.max_queries, max_read=args.max_read)
+    searcher = factory(llm=llm, engine=args.engine, topk=args.topk,
+                       max_queries=args.max_queries, max_read=args.max_read)
+    # 与模型SDK的--timeout一致；整体Searcher仍受180秒上限约束。
+    searcher.MODEL_TIMEOUT_S = min(getattr(args, "timeout", searcher.MODEL_TIMEOUT_S),
+                                 searcher.RUN_TIMEOUT_S)
+    return searcher
 
 
 # ---------------------------------------------------------------- 三臂执行
@@ -136,6 +184,7 @@ async def run_mindsearch(app, question: str):
         "citation_unknown": list(state.get("citation_unknown") or []),
         "prompt_tokens": int(state.get("prompt_tokens", 0) or 0),
         "completion_tokens": int(state.get("completion_tokens", 0) or 0),
+        **{key: int(state.get(key, 0) or 0) for key in COST_FIELDS},
     }
 
 
@@ -145,7 +194,11 @@ async def run_no_search(llm, question: str):
     return {"answer": fmt.short, "answer_raw": fmt.long, "dag": {}, "turns": 1,
             "truncated": False, "stop_reason": "no_search", "format_ok": fmt.format_ok,
             "citation_ok": None, "citation_unknown": [],
-            "prompt_tokens": res.n_prompt_pos, "completion_tokens": res.n_gen_tokens}
+            "prompt_tokens": res.n_prompt_pos, "completion_tokens": res.n_gen_tokens,
+            "planner_prompt_tokens": res.n_prompt_pos,
+            "planner_completion_tokens": res.n_gen_tokens,
+            "searcher_prompt_tokens": 0, "searcher_completion_tokens": 0,
+            "queries_count": 0, "pages_read": 0}
 
 
 async def run_single_turn(searcher, llm, question: str):
@@ -167,7 +220,12 @@ async def run_single_turn(searcher, llm, question: str):
             "prompt_tokens": int(getattr(out, "n_prompt_pos", 0) or 0)
             + int(res.prompt_tokens or 0),
             "completion_tokens": int(getattr(out, "n_gen_tokens", 0) or 0)
-            + int(res.completion_tokens or 0)}
+            + int(res.completion_tokens or 0),
+            "planner_prompt_tokens": int(getattr(out, "n_prompt_pos", 0) or 0),
+            "planner_completion_tokens": int(getattr(out, "n_gen_tokens", 0) or 0),
+            "searcher_prompt_tokens": int(res.prompt_tokens or 0),
+            "searcher_completion_tokens": int(res.completion_tokens or 0),
+            "queries_count": len(res.queries or []), "pages_read": int(res.pages_read or 0)}
 
 async def run_ReAct(searcher, llm, question: str):
     pass
@@ -213,6 +271,9 @@ def summarize(samples: list[dict]) -> dict:
                                 if cit else None),
         "avg_prompt_tokens": round(sum(s["prompt_tokens"] for s in samples) / n, 1),
         "avg_completion_tokens": round(sum(s["completion_tokens"] for s in samples) / n, 1),
+        **{f"total_{key}": sum(s.get(key, 0) for s in samples) for key in COST_FIELDS},
+        **{f"avg_{key}": round(sum(s.get(key, 0) for s in samples) / n, 1)
+           for key in COST_FIELDS},
         "avg_latency_s": round(sum(s["latency_s"] for s in samples) / n, 2),
         "avg_turns": round(sum(s["turns"] for s in samples) / n, 2),
         "avg_nodes": round(sum(s["n_nodes"] for s in samples) / n, 2),
@@ -234,9 +295,12 @@ def main() -> None:
     ap.add_argument("--benchmark", default=None, help="benchmark 注册名（如 bamboogle）")
     ap.add_argument("--question", default=None, help="只跑单题（调试用）")
     ap.add_argument("--n", type=int, default=1)
-    ap.add_argument("--model", default=os.environ.get("LYCHEE_LLM_MODEL", "gpt-4o-mini"))
-    ap.add_argument("--base-url", default=os.environ.get("LYCHEE_LLM_BASE_URL"))
-    ap.add_argument("--api-key-env", default="LYCHEE_LLM_API_KEY")
+    ap.add_argument("--model", default=None)
+    ap.add_argument("--base-url", default=None)
+    ap.add_argument("--api-key-env", default=None)
+    ap.add_argument("--check-config", action="store_true", help="仅验证配置，不调用服务")
+    ap.add_argument("--searcher-trace", action="store_true",
+                    help="保存脱敏Searcher阶段日志、提示词、模型返回和正文，供离线诊断")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--max-new-tokens", type=int, default=2048)
     ap.add_argument("--timeout", type=float, default=120.0)
@@ -257,8 +321,15 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    if not os.environ.get(args.api_key_env):
-        raise SystemExit(f"缺少环境变量 {args.api_key_env}（不做静默兜底）")
+    configure_api(args)
+    if args.check_config:
+        print(json.dumps(redact_fields({
+            "model": args.model, "base_url": args.base_url, "api_key_env": args.api_key_env,
+            "env_file_loaded": args.env_file_loaded, "model_key_present": True,
+            "tavily_key_present": bool(os.environ.get("TAVILY_API_KEY")),
+            "arm": args.arm, "searcher": args.searcher,
+        }), ensure_ascii=False, indent=2))
+        return
 
     # ---- 数据集 ----
     if args.question:
@@ -271,7 +342,8 @@ def main() -> None:
         try:
             records = BENCH.load(args.benchmark, args.n)
         except KeyError as exc:
-            raise SystemExit(f"数据集 {args.benchmark!r} 未注册（需要 B 的 eval 分支）：{exc}") from exc
+            raise SystemExit(
+                f"数据集 {args.benchmark!r} 未注册（需要 B 的 eval 分支）：{exc}") from exc
 
     # ---- 组件 ----
     llm = build_llm(args)
@@ -310,6 +382,8 @@ def main() -> None:
         "engine": args.engine,
         "benchmark": args.benchmark, "n": len(records), "seed": args.seed,
         "model": args.model, "base_url": args.base_url, "temperature": args.temperature,
+        "api_key_env": args.api_key_env, "env_file_loaded": args.env_file_loaded,
+        "searcher_trace": args.searcher_trace,
         "max_new_tokens": args.max_new_tokens, "max_turns": args.max_turns,
         "max_nodes": args.max_nodes, "max_subq_per_turn": args.max_subq,
         "max_concurrency": args.concurrency, "max_fail_streak": args.max_fail_streak,
@@ -333,19 +407,20 @@ def main() -> None:
         t0 = time.time()
         _LLM_CALLS["n"] = 0
         try:
-            if args.arm == "mindsearch":
-                res = asyncio.run(run_mindsearch(app, rec["question"]))
-            elif args.arm == "no_search":
-                res = asyncio.run(run_no_search(llm, rec["question"]))
-            else:
-                res = asyncio.run(run_single_turn(searcher, llm, rec["question"]))
+            with trace_file(out_dir / "searcher_trace.jsonl", enabled=args.searcher_trace):
+                if args.arm == "mindsearch":
+                    res = asyncio.run(run_mindsearch(app, rec["question"]))
+                elif args.arm == "no_search":
+                    res = asyncio.run(run_no_search(llm, rec["question"]))
+                else:
+                    res = asyncio.run(run_single_turn(searcher, llm, rec["question"]))
             err = ""
         except Exception as exc:                     # 单题失败不打断整批，但要留痕
             res = {"answer": "", "answer_raw": "", "dag": {}, "turns": 0,
                    "truncated": True, "stop_reason": "exception", "format_ok": False,
                    "citation_ok": False, "citation_unknown": [],
                    "prompt_tokens": 0, "completion_tokens": 0}
-            err = f"{type(exc).__name__}: {exc}"
+            err = f"{type(exc).__name__}; details redacted"
 
         latency = round(time.time() - t0, 3)
         pred = (res["answer"] or "").strip()
@@ -358,7 +433,7 @@ def main() -> None:
 
         sample = {
             "case_id": case_id, "task": rec["task"], "kind": rec["kind"],
-            "scorer_kind": rec["kind"], "method": "mindsearch",
+            "scorer_kind": rec["kind"], "method": args.arm,
             "arm": args.arm, "question": rec["question"], "gold": rec["gold"],
             "prediction": pred, "prediction_raw": res["answer_raw"],
             "score": score,
@@ -371,6 +446,7 @@ def main() -> None:
             "dag_depth": dag_depth(res["dag"]),
             "prompt_tokens": res["prompt_tokens"],
             "completion_tokens": res["completion_tokens"],
+            **{key: int(res.get(key, 0) or 0) for key in COST_FIELDS},
             # 框架 aggregate_samples 认的规范字段名（别名，避免 token 被算成 0）
             "input_positions_total": res["prompt_tokens"],
             "output_tokens_total": res["completion_tokens"],
@@ -386,9 +462,17 @@ def main() -> None:
               f"cit={res.get('citation_ok')} pred={pred[:40]!r} err={err[:60]}", flush=True)
 
     summary = summarize(samples)
+    framework = M.aggregate_samples(
+        samples,
+        run_info={"model": args.model, "method": args.arm,
+                  "task": args.benchmark or "adhoc",
+                  "scorer_kind": records[0]["kind"] if records else "exact",
+                  "git_sha": config["git_sha"]})
     (out_dir / "metrics.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[{args.arm}] accuracy={summary['accuracy']} out_dir={out_dir}", flush=True)
+        json.dumps({**summary, "framework": framework}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    print(f"[{args.arm}] accuracy={summary['accuracy']} "
+          f"mean_score={framework.get('mean_score')} out_dir={out_dir}", flush=True)
 
 
 if __name__ == "__main__":

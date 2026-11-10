@@ -1,0 +1,8 @@
+{
+  "source": "https://zh.wikipedia.org/zh-hans/%E7%8E%9B%E4%B8%BD%C2%B7%E5%B1%85%E9%87%8C",
+  "capture_sha256": "c44a056880cc0ce819529594122d8af9a51ef50eb41c350213fecf7a12e0ee4e",
+  "birth_excerpt": "玛丽亚生于[俄罗斯帝国](/wiki/%E4%BF%84%E7%BD%97%E6%96%AF%E5%B8%9D%E5%9B%BD \"俄罗斯帝国\")统治下的[华沙](/wiki/%E5%8D%8E%E6%B2%99 \"华沙\")。",
+  "selected_distractor": "其父亲在学校教书。1897年，大女儿伊雷娜出生。",
+  "original_response": "{\"answer\": \"\", \"source_ids\": [], \"evidence\": []}",
+  "old_selected_has_birth_excerpt": false
+}

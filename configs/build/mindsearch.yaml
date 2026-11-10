@@ -9,16 +9,18 @@ max_nodes: 40
 max_concurrency: 8
 wall_clock_s: 300
 
-# 检索侧（B 实现时读取）
+# 检索侧模板；独立 smoke 使用固定小预算，见 docs/mindsearch-searcher.md
 search:
-  engine: tavily
+  engine: tavily # Search basic + Extract basic；Key: TAVILY_API_KEY
   topk: 3
   max_queries: 3
   max_read: 3
-  cache_dir: runs/mindsearch/cache
+  # 当前无磁盘缓存，Key/正文不落盘
 
 # 规划/总结 LLM（端点与 key 走环境变量 LYCHEE_LLM_*）
 llm:
-  model: null
+  base_url: https://api.siliconflow.cn/v1
+  model: deepseek-ai/DeepSeek-V4.1-Flash
+  api_key_env: SILICONFLOW_API_KEY
   temperature: 0.0
-  max_new_tokens: 2048
+  max_new_tokens: 512

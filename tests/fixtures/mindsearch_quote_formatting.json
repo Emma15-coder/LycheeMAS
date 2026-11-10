@@ -1,0 +1,36 @@
+[
+  {
+    "case": "bank_date",
+    "source_url": "https://en.wikipedia.org/wiki/Citibank",
+    "excerpt": "| Founded | June 16, 1812; 214 years ago (1812-06-16) (as City Bank of New York) |",
+    "summary": {
+      "answer": "Citibank was founded on June 16, 1812, as the City Bank of New York [S1].",
+      "source_ids": [
+        "S1"
+      ],
+      "evidence": [
+        {
+          "source_id": "S1",
+          "quote": "Founded | June 16, 1812; 214 years ago (1812-06-16) (as City Bank of New York)"
+        }
+      ]
+    }
+  },
+  {
+    "case": "fleming_country",
+    "source_url": "https://en.wikipedia.org/wiki/Alexander_Fleming",
+    "excerpt": "| Born | (1881-08-06)6 August 1881  [Darvel](https://en.wikipedia.org/wiki/Darvel \"Darvel\"), Ayrshire, Scotland |",
+    "summary": {
+      "answer": "Scotland [S1]",
+      "source_ids": [
+        "S1"
+      ],
+      "evidence": [
+        {
+          "source_id": "S1",
+          "quote": "Darvel, Ayrshire, Scotland"
+        }
+      ]
+    }
+  }
+]
