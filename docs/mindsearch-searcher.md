@@ -333,3 +333,13 @@ Tavily每条请求超时20秒，最多3条查询顺序请求。因此搜索批�
 主入口现在将Searcher的模型等待与`--timeout`对齐（默认120秒，最多受180秒整体预算约束）；
 搜索/抓取的外层35秒及Tavily单请求20秒保持不变。独立构造WebSearcher的模型等待默认仍为35秒。
 这是修复主入口SDK配置120秒、Searcher却提前35秒取消的不一致，并不保证服务一定及时响应。
+
+### 搜索后端错误分类
+
+Tavily使用`SearchBackendError`（兼容RuntimeError）携带固定原因码：`http_error`、
+`network_timeout`、`connection_error`、`invalid_json`、`invalid_response`、
+`response_too_large`、`extract_failed`、`unexpected_error`。
+HTTP错误仅保留数值状态码；不记录响应正文、认证头或网络异常正文。
+Searcher将原因码及可选`http_status`写入既有`error`文本和`searcher.error`事件，
+因此Planner的失败节点也能保留分类。传输失败另有`tavily.error`阶段耗时记录。
+错误分类不是对历史RuntimeError的反向推断，也不增加自动重试或改变预算。

@@ -18,6 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from ....backends.search_errors import SearchBackendError
 from ....backends.searcher_trace import RUN_ID, STAGE, trace
 from ....backends.web_utils import canonical_url
 from .page_content import resolve_evidence_quote, select_page_content
@@ -116,8 +117,15 @@ class WebSearcher:
                       str(exc).replace(" ", "_") if type(exc) is ValueError and str(exc) in known
                       else "external_or_validation_error")
             result.error += f"; stage={STAGE.get()['name']}; reason={reason}"
+            if isinstance(exc, SearchBackendError):
+                reason = exc.reason
+                result.error = (f"searcher failed ({type(exc).__name__}); details redacted; "
+                                f"stage={STAGE.get()['name']}; reason={reason}")
+                if exc.http_status is not None:
+                    result.error += f"; http_status={exc.http_status}"
             trace("searcher.error", error_type=type(exc).__name__,
-                  stage=STAGE.get()["name"], reason=reason)
+                  stage=STAGE.get()["name"], reason=reason,
+                  http_status=exc.http_status if isinstance(exc, SearchBackendError) else None)
         finally:
             trace("searcher.end", status=result.status, pages_read=result.pages_read,
                   prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,

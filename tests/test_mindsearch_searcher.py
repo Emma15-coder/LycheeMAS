@@ -417,3 +417,31 @@ def test_model_timeout_is_separate_from_search_timeout():
         assert result.status == 'error' and 'stage=rewrite; reason=timeout' in result.error
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('stage,reason,status', [
+    ('search', 'http_error', 429),
+    ('search', 'connection_error', None),
+    ('search', 'invalid_json', None),
+    ('fetch', 'extract_failed', None),
+    ('fetch', 'network_timeout', None),
+])
+def test_backend_safe_metadata_reaches_searcher_result_and_trace(caplog, stage, reason, status):
+    from lychee_mas.backends.search_errors import SearchBackendError
+
+    caplog.set_level('INFO', logger='lychee_mas.mindsearch.trace')
+    fake = Fake()
+    searcher = fake.searcher()
+
+    async def fail(*args):
+        raise SearchBackendError(reason, http_status=status)
+
+    setattr(searcher, stage, fail)
+    result = asyncio.run(searcher.run('q'))
+    assert result.status == 'error' and result.answer == '' and result.sources == []
+    assert f'stage={stage}; reason={reason}' in result.error
+    event = next(e for e in trace_events(caplog) if e['event'] == 'searcher.error')
+    assert event['stage'] == stage and event['reason'] == reason
+    assert event['http_status'] == status
+    if status:
+        assert f'http_status={status}' in result.error
