@@ -343,3 +343,21 @@ HTTP错误仅保留数值状态码；不记录响应正文、认证头或网络�
 Searcher将原因码及可选`http_status`写入既有`error`文本和`searcher.error`事件，
 因此Planner的失败节点也能保留分类。传输失败另有`tavily.error`阶段耗时记录。
 错误分类不是对历史RuntimeError的反向推断，也不增加自动重试或改变预算。
+
+### 逐题成本和检索强度
+
+`predictions.jsonl`新增`planner_prompt_tokens`、`planner_completion_tokens`、
+`searcher_prompt_tokens`、`searcher_completion_tokens`、`queries_count`和`pages_read`。
+`metrics.json`原有汇总新增这些字段的`total_`及`avg_`统计；`framework`标准块保持原口径。
+Planner/state仅增加统计键，不改变SearcherResult或DAG节点结构。
+
+Planner成本包含规划、格式/引用纠错及最终回答；Searcher包含查询改写、选页和证据总结。
+新运行中两部分按输入/输出分别相加等于原有总数，失败尝试中已经返回的usage也计入。
+未返回usage的超时/断连请求无法计账，这些值不是完整账单。旧结果和旧checkpoint只有总数时，
+无法回溯拆分历史消耗；应从新运行开始使用细分数据。
+
+`queries_count`累计Searcher提交给search回调的查询列表长度，包括失败批次和重复尝试，
+不做跨节点去重。若批次中途失败，列表后面的查询可能尚未实际发出，因此不能视为HTTP请求数。
+`pages_read`累计成功取得非空正文的次数，包含后来总结失败的页面；同一URL读两次算两次，
+并非独立网页数、有效证据页数或最终引用数。no_search的两项检索计数为0；
+非检索回答的模型消耗归入Planner侧（single_turn同理，包括其最后一次回答）。

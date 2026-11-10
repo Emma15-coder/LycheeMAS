@@ -14,6 +14,12 @@ class MindSearchState(TypedDict, total=False):
     truncated: bool                # 是否因上限被截断（轮数/子问题数/节点数）
     prompt_tokens: int
     completion_tokens: int
+    planner_prompt_tokens: int     # 规划、纠错和最终回答（已返回usage）
+    planner_completion_tokens: int
+    searcher_prompt_tokens: int    # 改写、选页和总结，包含失败尝试已返回usage
+    searcher_completion_tokens: int
+    queries_count: int             # 累计提交给search回调的查询条数，非去重/HTTP请求数
+    pages_read: int                # 累计取得非空正文的次数，非独立URL数
     error: str                     # 非空表示本次运行失败（显式记录，不静默）
     stop_reason: str               # finish|giveup|max_turns|max_nodes|timeout|stalled|plan_error
                                    # |redundant|forced_expand|premature_finish|exception

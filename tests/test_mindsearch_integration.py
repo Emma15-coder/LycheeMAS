@@ -117,6 +117,15 @@ class Pipeline:
     def assert_usage(self, result):
         assert result["prompt_tokens"] == sum(r.n_prompt_pos for r in self.responses)
         assert result["completion_tokens"] == sum(r.n_gen_tokens for r in self.responses)
+        for prefix, planner in (("planner", True), ("searcher", False)):
+            responses = [r for prompt, r in zip(self.prompts, self.responses)
+                         if ("Current task graph:" in prompt) == planner]
+            assert result[f"{prefix}_prompt_tokens"] == sum(r.n_prompt_pos for r in responses)
+            assert result[f"{prefix}_completion_tokens"] == sum(r.n_gen_tokens for r in responses)
+        assert result["queries_count"] == sum(e[0] == "search.start" for e in self.events)
+        expected_pages = (0 if self.fault in ("empty_body", "fetch_timeout") else
+                          sum(e[0] == "fetch" for e in self.events))
+        assert result["pages_read"] == expected_pages
         assert not self.plans
 
 
@@ -240,3 +249,29 @@ def test_failed_parent_blocks_child_and_alternative_can_finish(entry, monkeypatc
     assert nodes["n0"]["status"] == "failed" and nodes["n1"]["status"] == "pending"
     assert nodes["n2"]["status"] == "done" and "blocked" not in pipeline.contexts
     assert pipeline.stages["rewrite"] == 2 and pipeline.stages["summary"] == 1
+
+
+def test_failed_attempts_and_repeated_pages_accumulate_across_retrieval_rounds():
+    from lychee_mas.methods.build.mindsearch import SearcherResult, TaskDAG
+    from lychee_mas.methods.build.mindsearch.planner import _retrieve
+
+    dag = TaskDAG('root')
+    first = dag.add_node('first')
+    second = dag.add_node('second')
+    tok = {'p': 10, 'c': 2, 'planner_prompt_tokens': 10, 'planner_completion_tokens': 2}
+
+    class FailedSearcher:
+        async def run(self, question, context):
+            return SearcherResult(sub_question=question, status='error',
+                                  queries=['same-query', 'another-query'], pages_read=1,
+                                  prompt_tokens=7, completion_tokens=3, error='summary failed')
+
+    async def scenario():
+        for qid in (first, second):
+            assert await _retrieve([qid], dag, FailedSearcher(), tok, 1) == (0, 0, 1)
+
+    asyncio.run(scenario())
+    assert tok['queries_count'] == 4 and tok['pages_read'] == 2
+    assert tok['searcher_prompt_tokens'] == 14 and tok['searcher_completion_tokens'] == 6
+    assert tok['p'] == tok['planner_prompt_tokens'] + tok['searcher_prompt_tokens'] == 24
+    assert tok['c'] == tok['planner_completion_tokens'] + tok['searcher_completion_tokens'] == 8

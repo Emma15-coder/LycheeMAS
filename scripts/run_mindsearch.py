@@ -53,6 +53,9 @@ SINGLE_TURN_PROMPT = """根据下面的检索结果回答问题。只依据检�
 
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+COST_FIELDS = ("planner_prompt_tokens", "planner_completion_tokens",
+               "searcher_prompt_tokens", "searcher_completion_tokens",
+               "queries_count", "pages_read")
 
 
 def configure_api(args: argparse.Namespace) -> None:
@@ -181,6 +184,7 @@ async def run_mindsearch(app, question: str):
         "citation_unknown": list(state.get("citation_unknown") or []),
         "prompt_tokens": int(state.get("prompt_tokens", 0) or 0),
         "completion_tokens": int(state.get("completion_tokens", 0) or 0),
+        **{key: int(state.get(key, 0) or 0) for key in COST_FIELDS},
     }
 
 
@@ -190,7 +194,11 @@ async def run_no_search(llm, question: str):
     return {"answer": fmt.short, "answer_raw": fmt.long, "dag": {}, "turns": 1,
             "truncated": False, "stop_reason": "no_search", "format_ok": fmt.format_ok,
             "citation_ok": None, "citation_unknown": [],
-            "prompt_tokens": res.n_prompt_pos, "completion_tokens": res.n_gen_tokens}
+            "prompt_tokens": res.n_prompt_pos, "completion_tokens": res.n_gen_tokens,
+            "planner_prompt_tokens": res.n_prompt_pos,
+            "planner_completion_tokens": res.n_gen_tokens,
+            "searcher_prompt_tokens": 0, "searcher_completion_tokens": 0,
+            "queries_count": 0, "pages_read": 0}
 
 
 async def run_single_turn(searcher, llm, question: str):
@@ -212,7 +220,12 @@ async def run_single_turn(searcher, llm, question: str):
             "prompt_tokens": int(getattr(out, "n_prompt_pos", 0) or 0)
             + int(res.prompt_tokens or 0),
             "completion_tokens": int(getattr(out, "n_gen_tokens", 0) or 0)
-            + int(res.completion_tokens or 0)}
+            + int(res.completion_tokens or 0),
+            "planner_prompt_tokens": int(getattr(out, "n_prompt_pos", 0) or 0),
+            "planner_completion_tokens": int(getattr(out, "n_gen_tokens", 0) or 0),
+            "searcher_prompt_tokens": int(res.prompt_tokens or 0),
+            "searcher_completion_tokens": int(res.completion_tokens or 0),
+            "queries_count": len(res.queries or []), "pages_read": int(res.pages_read or 0)}
 
 async def run_ReAct(searcher, llm, question: str):
     pass
@@ -258,6 +271,9 @@ def summarize(samples: list[dict]) -> dict:
                                 if cit else None),
         "avg_prompt_tokens": round(sum(s["prompt_tokens"] for s in samples) / n, 1),
         "avg_completion_tokens": round(sum(s["completion_tokens"] for s in samples) / n, 1),
+        **{f"total_{key}": sum(s.get(key, 0) for s in samples) for key in COST_FIELDS},
+        **{f"avg_{key}": round(sum(s.get(key, 0) for s in samples) / n, 1)
+           for key in COST_FIELDS},
         "avg_latency_s": round(sum(s["latency_s"] for s in samples) / n, 2),
         "avg_turns": round(sum(s["turns"] for s in samples) / n, 2),
         "avg_nodes": round(sum(s["n_nodes"] for s in samples) / n, 2),
@@ -430,6 +446,7 @@ def main() -> None:
             "dag_depth": dag_depth(res["dag"]),
             "prompt_tokens": res["prompt_tokens"],
             "completion_tokens": res["completion_tokens"],
+            **{key: int(res.get(key, 0) or 0) for key in COST_FIELDS},
             # 框架 aggregate_samples 认的规范字段名（别名，避免 token 被算成 0）
             "input_positions_total": res["prompt_tokens"],
             "output_tokens_total": res["completion_tokens"],

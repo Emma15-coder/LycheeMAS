@@ -176,10 +176,16 @@ def test_main_auto_loads_keys_and_writes_standard_artifacts_without_network(
     sample = json.loads((folder / "predictions.jsonl").read_text())
     assert sample["prediction"] == "test-answer"
     assert sample["method"] == sample["arm"] == arm
+    assert sample["planner_prompt_tokens"] == sample["prompt_tokens"] == 10
+    assert sample["planner_completion_tokens"] == sample["completion_tokens"] == 2
+    assert sample["searcher_prompt_tokens"] == sample["searcher_completion_tokens"] == 0
+    assert sample["queries_count"] == sample["pages_read"] == (arm == "single_turn")
     metrics = json.loads((folder / "metrics.json").read_text())
     assert metrics["accuracy"] is None  # 手输单题没有标准答案
     assert metrics["avg_prompt_tokens"] == 10
     assert metrics["avg_completion_tokens"] == 2
+    assert metrics["total_planner_prompt_tokens"] == 10
+    assert metrics["avg_queries_count"] == (arm == "single_turn")
     expected = entry.M.aggregate_samples([sample], run_info={
         "model": config["model"], "method": arm, "task": "adhoc",
         "scorer_kind": "exact", "git_sha": config["git_sha"],
@@ -241,3 +247,25 @@ def test_load_dotenv_called_with_checked_stream_and_override_false(entry, monkey
     monkeypatch.setattr(dotenv, "load_dotenv", tracked)
     entry.configure_api(args())
     assert calls == [True]
+
+
+@pytest.mark.parametrize('status', ['ok', 'error'])
+def test_single_turn_splits_answer_and_search_costs_even_after_failed_search(entry, status):
+    from lychee_mas.methods.build.mindsearch import SearcherResult
+
+    class Searcher:
+        async def run(self, question, context):
+            return SearcherResult(sub_question=question, status=status, answer='',
+                                  queries=['q1', 'q2'], pages_read=1,
+                                  prompt_tokens=17, completion_tokens=5)
+
+    async def model(prompt):
+        return SimpleNamespace(text='Answer: unknown', n_prompt_pos=11, n_gen_tokens=3)
+
+    result = asyncio.run(entry.run_single_turn(Searcher(), model, 'question'))
+    assert result['planner_prompt_tokens'] == 11
+    assert result['planner_completion_tokens'] == 3
+    assert result['searcher_prompt_tokens'] == 17
+    assert result['searcher_completion_tokens'] == 5
+    assert result['prompt_tokens'] == 28 and result['completion_tokens'] == 8
+    assert result['queries_count'] == 2 and result['pages_read'] == 1

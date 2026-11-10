@@ -432,3 +432,11 @@ make lint && make test && make selfcheck                      # 三件套
 | `test_mind_search_answer.py` 与 `test_mindsearch_answer.py` 并存 | 手误新建                | 命名统一 `test_mindsearch_*`；pytest 会同时收集两个           |
 | 文档只存到 §3.1（截断）                                          | 从对话复制长文          | 落盘后 `grep -c '^## '` 自检节数                              |
 | 顶层 `import langgraph` 风险                                     | 图省事写在模块头        | 只在函数内 import；`make selfcheck` 必须 `HEAVY LOADED: NONE` |
+
+#### 可选运行统计（2026-11-10，兼容性增量）
+
+MindSearchState和逐题产物增加`planner_prompt_tokens`、`planner_completion_tokens`、
+`searcher_prompt_tokens`、`searcher_completion_tokens`、`queries_count`、`pages_read`。
+原有总token字段及Searcher/DAG冻结签名不变。统计包含失败尝试已返回的usage；
+queries_count为累计查询批次条目数，pages_read为累计取得非空正文次数，均不跨尝试去重。
+超时无usage的费用及旧checkpoint历史细分不能反推，完整口径见mindsearch-searcher.md。
