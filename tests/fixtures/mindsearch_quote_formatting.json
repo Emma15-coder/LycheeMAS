@@ -32,5 +32,22 @@
         }
       ]
     }
+  },
+  {
+    "case": "bank_bold_20261111",
+    "source_url": "https://en.wikipedia.org/wiki/Citibank",
+    "excerpt": "**Citibank, N.A.** (stylized as **citi**bank; \"N.A.\" stands for \"[National Association](https://en.wikipedia.org/wiki/National_bank_(United_States) \"National bank (United States)\")\") is the primary U.S. banking subsidiary of [Citigroup](https://en.wikipedia.org/wiki/Citigroup \"Citigroup\"), a [financial services](https://en.wikipedia.org/wiki/Financial_services \"Financial services\") [multinational](https://en.wikipedia.org/wiki/Multinational_corporation \"Multinational corporation\") corporation.[[2]](#cite_note-2) Citibank was founded in 1812 as **City Bank of New York**, and later became **First National City Bank of New York**.[[3]](#cite_note-3) The bank has [branches](https://en.wikipedia.org/wiki/Branch_(banking) \"Branch (banking)\") in 19 countries.[[1]](#cite_note-10K-1) The U.S. branches are concentrated in six metropolitan areas: [New York City](https://en.wikipedia.org/wiki/New_York_City \"New York City\"), [Chicago](https://en.wikipedia.org/wiki/Chicago \"Chicago\"), [Los Angeles](https://en.wikipedia.org/wiki/Los_Angeles \"Los Angeles\"), [San Francisco](https://en.wikipedia.org/wiki/San_Francisco \"San Francisco\"), [Washington, D.C.](https://en.wikipedia.org/wiki/Washington,_D.C. \"Washington, D.C.\"), and [Miami](https://en.wikipedia.org/wiki/Miami \"Miami\"). Citibank used to maintain a longtime presence in the [Boston](https://en.wikipedia.org/wiki/Boston \"Boston\") metropolitan area, but withdrew from their seventh major market in 2016.[[1]](#cite_note-10K-1)[[4]](#cite_note-4)",
+    "summary": {
+      "answer": "Citibank was founded in 1812 [S1].",
+      "source_ids": [
+        "S1"
+      ],
+      "evidence": [
+        {
+          "source_id": "S1",
+          "quote": "Citibank was founded in 1812 as City Bank of New York"
+        }
+      ]
+    }
   }
 ]

@@ -129,7 +129,7 @@ def select_page_content(raw: str, query: str, *, budget: int = 12000,
 
 
 def resolve_evidence_quote(quote: str, supplied: str, raw: str) -> str | None:
-    """将可见文字摘录映射回连续原文；仅处理链接包装和不换行空格。
+    """将可见文字摘录映射回连续原文；处理链接、成对加粗标记和不换行空格。
 
     不做模糊匹配、不删标点或词语。返回值必须同时是模型输入和原始正文的连续子串，
     因此不能用跨片段拼接或语义相近的句子冒充原文。
@@ -156,6 +156,26 @@ def resolve_evidence_quote(quote: str, supplied: str, raw: str) -> str | None:
     for i in range(cursor, len(supplied)):
         chars.append(supplied[i])
         offsets.append(i)
+
+    # 只移除明确成对、单行的加粗包装，不全局删除星号/下划线。
+    # 保留原字符位置，最终仍须在raw中找到连续原文，防止跨片段拼接。
+    linked = "".join(chars)
+    hidden: set[int] = set()
+    for pattern in (r"(?<![\w\\*])\*\*(?=\S)([^*\n]*?[^*\s])\*\*(?![\w*])",
+                    r"(?<![\w\\_])__(?=\S)([^_\n]*?[^_\s])__(?![\w_])"):
+        for match in re.finditer(pattern, linked):
+            line_start = linked.rfind("\n", 0, match.start()) + 1
+            line_end = linked.find("\n", match.end())
+            line = linked[line_start:line_end if line_end >= 0 else len(linked)]
+            if "`" in line or "\\" in match[0]:  # 不解释代码或转义标记
+                continue
+            hidden.update(range(match.start(), match.start(1)))
+            hidden.update(range(match.end(1), match.end()))
+    if hidden:
+        kept = [(char, offset) for i, (char, offset) in enumerate(zip(chars, offsets))
+                if i not in hidden]
+        chars = [char for char, _ in kept]
+        offsets = [offset for _, offset in kept]
 
     def spaces(text: str) -> str:
         return text.replace("\u00a0", " ").replace("\u202f", " ")
