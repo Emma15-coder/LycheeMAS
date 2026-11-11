@@ -445,3 +445,36 @@ def test_backend_safe_metadata_reaches_searcher_result_and_trace(caplog, stage, 
     assert event['http_status'] == status
     if status:
         assert f'http_status={status}' in result.error
+
+
+@pytest.mark.parametrize('text,quote', [
+    ('Founded as **City Bank of New York**, in 1812.',
+     'Founded as City Bank of New York, in 1812.'),
+    ('Founded as __City Bank of New York__, in 1812.',
+     'Founded as City Bank of New York, in 1812.'),
+    ('Born in **[Darvel](https://example.org/darvel)**, Scotland.',
+     'Born in Darvel, Scotland.'),
+    ('**Born** in\u00a0Scotland.', 'Born in Scotland.'),
+])
+def test_bold_quote_mapping_returns_contiguous_original(text, quote):
+    from lychee_mas.methods.build.mindsearch.page_content import resolve_evidence_quote
+
+    original = resolve_evidence_quote(quote, text, text)
+    assert original is not None and original in text
+    assert '**' in original or '__' in original
+
+
+@pytest.mark.parametrize('text,quote', [
+    ('Founded in **1812**.', 'Founded in 1813.'),
+    ('Born in **Scotland**.', 'Born in England.'),
+    ('Founded as **City Bank.', 'Founded as City Bank.'),
+    ('Count = 2 * 3.', 'Count = 2  3.'),
+    ('code: `a ** b ** c`', 'code: `a b c`'),
+    (r'Literal \**word**.', 'Literal word.'),
+    ('identifier a__b__c', 'identifier abc'),
+    ('Founded in **1812**.\n\nBorn in Scotland.', 'Founded in 1812. Born in Scotland.'),
+])
+def test_bold_mapping_preserves_facts_literals_and_boundaries(text, quote):
+    from lychee_mas.methods.build.mindsearch.page_content import resolve_evidence_quote
+
+    assert resolve_evidence_quote(quote, text, text) is None

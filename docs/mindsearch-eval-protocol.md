@@ -37,17 +37,28 @@
 
 | 数据集      | kind                        | 说明                                      |
 | ----------- | --------------------------- | ----------------------------------------- |
-| `bamboogle` | `exact`                     | 短答案规整后精确匹配                      |
-| `musique`   | `exact`                     | 同上                                      |
-| `hotpotqa`  | `exact`（另记 `f1` 作辅助） | 论文用 GPT-4o judge；本版**不引入 judge** |
+| `bamboogle` | `normalized_em`（loader kind仍为exact） | 短答案规整后完全相等 |
+| `musique`   | `normalized_em`             | 同上                                      |
+| `hotpotqa`  | `normalized_em`             | 论文用GPT-4o judge；本版EM为主，LLM Judge作补充 |
 
-**为什么不用 judge**：仓库 `metrics` 是离线纯函数，`analyze_benchmark_run.py --score-predictions`
-支持事后复算；引入 judge 会破坏"可复算"并带来漂移与费用。
+由`scripts/mindsearch_metrics.py`复用框架`_norm`（小写、去ASCII标点、去英文冠词、压空白），
+再判定完全相等；不采用框架原exact的最后数字或子串匹配。框架metrics.py保持不变。
+空gold不评分；归一化后为空的gold不判正确。不额外做日期重排、别名或单位语义等价。
+run_config、逐题记录、metrics及framework质量指标标记score_metric=normalized_em；
+kind/scorer_kind=exact保留为原有二值任务分类，不代表调用旧评分函数。
+原始结果不覆盖，可使用scripts/rescore_mindsearch.py离线另存重评分；人工复核另列，
+不得把人工语义正确率与EM混为同一指标。F1/人工完整性评价尚需独立补充。
+
+**主评分保持离线**：规范化EM可离线复算；LLM Judge作为独立补充，需要额外API费用，
+保存提示词、原始判定及usage，结果不得覆盖EM。通用分析脚本仍采用框架原评分，
+本实验的EM重算应使用scripts/rescore_mindsearch.py。
 
 **配套约束**：planner 的 `finish` 必须首行为 `Answer: <短答案>`（实体 / yes / no），
 其余为解释——这样 `exact` 才能工作。这条写进 `PLANNER_PROMPT`。
 
-> 若后续要做 judge 敏感性分析：单独开 `eval_llm_judge` 分支 + 单独 PR，不混入本协议。
+> 补充Judge位于scripts/judge_mindsearch.py，不改框架eval目录；默认预览，显式--execute才请求模型。
+> 输出correct/incorrect/uncertain，调用或解析失败单独记录，正确率须同时报告判定覆盖率。
+> 同模型评判偏差与人工复核限制须注明，使用方法见docs/mindsearch-judge.md。
 
 ---
 
@@ -66,7 +77,7 @@
 | 臂                   | 定义                              | 实现位置                                    |
 | -------------------- | --------------------------------- | ------------------------------------------- |
 | `no_search`          | 纯 LLM 直答（无检索工具）         | `scripts/run_mindsearch.py --arm no_search` |
-| `single_turn_search` | 1 次 query → top-k 页 → 直答      | 同上                                        |
+| `single_turn_search` | 调用一次完整Searcher → 作答，内部检索预算与MindSearch一致 | 同上 |
 | `mindsearch`         | 本复现（动态 DAG + 并行分层检索） | 同上                                        |
 | `react`（可选）      | ReAct 多轮工具调用                | 同上，时间允许再做                          |
 

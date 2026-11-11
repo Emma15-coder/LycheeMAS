@@ -361,3 +361,47 @@ Planner成本包含规划、格式/引用纠错及最终回答；Searcher包含�
 `pages_read`累计成功取得非空正文的次数，包含后来总结失败的页面；同一URL读两次算两次，
 并非独立网页数、有效证据页数或最终引用数。no_search的两项检索计数为0；
 非检索回答的模型消耗归入Planner侧（single_turn同理，包括其最后一次回答）。
+
+### Single-turn基线的检索预算（2026-11-11）
+
+`--arm single_turn`只调用一次完整`WebSearcher.run()`，然后作答，不构建DAG或继续规划。
+内部与MindSearch使用相同的`--max-queries`、`--topk`、`--max-read`配置，默认均为3；
+一次Searcher调用可包含多条Tavily搜索请求及多页Extract，不等同于一次底层HTTP请求。
+此前脚本将三个参数强制改为1，现已移除覆盖，run_config记录值与实际预算一致。
+这是项目内部统一预算的单轮基线，不宣称复现论文未明确给出的Single-turn底层请求预算。
+旧1/1/1结果保留为历史基线，不与新配置混合汇总。单轮调用仍可能因证据不足返回empty。
+
+### Markdown加粗摘录回归（2026-11-11）
+
+证据映射支持明确成对、单行的`**文本**`和`__文本__`加粗包装；
+只移除识别出的包装标记，保留正文字符与原始位置映射，最终仍核验连续原文。
+不全局删除星号或下划线，不解释代码/转义或不完整标记，不做模糊匹配。
+`mindsearch_quote_formatting.json`增加本次花旗银行失败节点的实际段落与模型摘录，
+可离线复现省略加粗标记造成的旧失败；跨片段拼接和事实改写仍不通过。
+
+格式兼容离线矩阵见`tests/test_mindsearch_markdown_evidence.py`：
+已支持加粗、链接（含与加粗组合）、不换行空格；标题/列表/引用中的连续正文可直接摘录。
+斜体、三重强调、行内代码、删除线、HTML实体/标签、软换行改空格、表格改写、引用式链接
+目前不做渲染转换；按原样引用可通过，改成可见文字且不再是原文子串时会明确返回
+unsupported_evidence。这些是已知兼容范围，不应将测试通过解读为完整Markdown渲染支持。
+用例同时检查改实体、数字、负号、否定词、标点或使用链接URL/标题隐藏内容时不得误通过。
+
+### 规范化EM与历史结果重算
+
+run_mindsearch.py对loader kind=exact的问答采用独立normalized_em（规范化后完全相等），
+保留原框架exact。run_config、predictions和metrics记录score_metric；framework中的
+quality_metric也标为normalized_em，二值类别scorer_kind仍为exact以兼容框架聚合。
+数值/答案子串不再直接判对，日期不同表达和额外修饰也可能EM为0，应另做人工复核。
+
+离线重算旧运行（命令中的目录替换为实际路径，不需要Key、不下载数据）：
+
+```bash
+PYTHONPATH=src python scripts/rescore_mindsearch.py \
+  runs/eval_benchmarks/bamboogle/no_search/20261111-164348 \
+  --out-root runs/mindsearch_rescored
+```
+
+新目录保存predictions.jsonl和rescore_report.json，逐题保留source_score和原指标名称，
+报告保留原运行配置。只改变离线评分，不代表重新运行了模型，不覆盖旧结果。
+通用analyze_benchmark_run.py若按kind=exact重评分仍会使用框架旧规则，
+此处应使用rescore_mindsearch.py，避免将两种口径混用。

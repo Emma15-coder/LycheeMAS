@@ -26,10 +26,10 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+import mindsearch_metrics as QA_METRICS
 from lychee_mas.backends.local_env import checked_env_stream
 from lychee_mas.backends.searcher_trace import redact_fields, trace_file
 from lychee_mas.eval import benchmarks as BENCH
-from lychee_mas.eval import metrics as M
 from lychee_mas.methods.build.mindsearch import MindSearchState, TaskDAG, planner_node_factory
 from lychee_mas.methods.build.mindsearch.answer_format import format_answer
 from lychee_mas.methods.build.mindsearch.searcher import SearcherResult, SourceRef
@@ -202,7 +202,7 @@ async def run_no_search(llm, question: str):
 
 
 async def run_single_turn(searcher, llm, question: str):
-    """单轮基线：1 次检索 + 1 次作答（不建 DAG，也不做多轮规划）。"""
+    """单轮基线：调用一次完整Searcher，再作答；内部检索预算与MindSearch相同。"""
     res = await searcher.run(question, f"根问题：{question}")
     urls = []
     for src in res.sources or []:
@@ -365,10 +365,8 @@ def main() -> None:
                              state_schema=MindSearchState)
         app = sg.compile()
     elif args.arm == "single_turn":
-        # 近似论文的 single-turn 基线：1 个 query、1 个结果、1 页
-        single = argparse.Namespace(**vars(args))
-        single.topk, single.max_queries, single.max_read = 1, 1, 1
-        searcher = build_searcher(llm, single)
+        # 一轮Searcher可改写多条查询并读取多页，不根据结果继续规划下一轮。
+        searcher = build_searcher(llm, args)
 
     # ---- 输出目录 ----
     ts = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
@@ -381,6 +379,7 @@ def main() -> None:
         "script": "run_mindsearch.py", "arm": args.arm, "searcher": args.searcher,
         "engine": args.engine,
         "benchmark": args.benchmark, "n": len(records), "seed": args.seed,
+        "score_metric": QA_METRICS.metric_name(records[0]["kind"]) if records else None,
         "model": args.model, "base_url": args.base_url, "temperature": args.temperature,
         "api_key_env": args.api_key_env, "env_file_loaded": args.env_file_loaded,
         "searcher_trace": args.searcher_trace,
@@ -425,7 +424,7 @@ def main() -> None:
         latency = round(time.time() - t0, 3)
         pred = (res["answer"] or "").strip()
         has_gold = rec["gold"] not in (None, "")
-        score = M.score(rec["kind"], pred, rec["gold"]) if has_gold else None
+        score = QA_METRICS.score_answer(rec["kind"], pred, rec["gold"]) if has_gold else None
         case_id = str(i)
 
         write_case_artifacts(out_dir, case_id, res["dag"])
@@ -434,6 +433,7 @@ def main() -> None:
         sample = {
             "case_id": case_id, "task": rec["task"], "kind": rec["kind"],
             "scorer_kind": rec["kind"], "method": args.arm,
+            "score_metric": QA_METRICS.metric_name(rec["kind"]),
             "arm": args.arm, "question": rec["question"], "gold": rec["gold"],
             "prediction": pred, "prediction_raw": res["answer_raw"],
             "score": score,
@@ -462,14 +462,15 @@ def main() -> None:
               f"cit={res.get('citation_ok')} pred={pred[:40]!r} err={err[:60]}", flush=True)
 
     summary = summarize(samples)
-    framework = M.aggregate_samples(
+    framework = QA_METRICS.aggregate_samples(
         samples,
         run_info={"model": args.model, "method": args.arm,
                   "task": args.benchmark or "adhoc",
                   "scorer_kind": records[0]["kind"] if records else "exact",
                   "git_sha": config["git_sha"]})
     (out_dir / "metrics.json").write_text(
-        json.dumps({**summary, "framework": framework}, ensure_ascii=False, indent=2),
+        json.dumps({**summary, "score_metric": config["score_metric"], "framework": framework},
+                   ensure_ascii=False, indent=2),
         encoding="utf-8")
     print(f"[{args.arm}] accuracy={summary['accuracy']} "
           f"mean_score={framework.get('mean_score')} out_dir={out_dir}", flush=True)
