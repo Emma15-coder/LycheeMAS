@@ -361,3 +361,12 @@ Planner成本包含规划、格式/引用纠错及最终回答；Searcher包含�
 `pages_read`累计成功取得非空正文的次数，包含后来总结失败的页面；同一URL读两次算两次，
 并非独立网页数、有效证据页数或最终引用数。no_search的两项检索计数为0；
 非检索回答的模型消耗归入Planner侧（single_turn同理，包括其最后一次回答）。
+
+### Single-turn基线的检索预算（2026-11-11）
+
+`--arm single_turn`只调用一次完整`WebSearcher.run()`，然后作答，不构建DAG或继续规划。
+内部与MindSearch使用相同的`--max-queries`、`--topk`、`--max-read`配置，默认均为3；
+一次Searcher调用可包含多条Tavily搜索请求及多页Extract，不等同于一次底层HTTP请求。
+此前脚本将三个参数强制改为1，现已移除覆盖，run_config记录值与实际预算一致。
+这是项目内部统一预算的单轮基线，不宣称复现论文未明确给出的Single-turn底层请求预算。
+旧1/1/1结果保留为历史基线，不与新配置混合汇总。单轮调用仍可能因证据不足返回empty。

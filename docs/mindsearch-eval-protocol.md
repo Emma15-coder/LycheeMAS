@@ -66,7 +66,7 @@
 | 臂                   | 定义                              | 实现位置                                    |
 | -------------------- | --------------------------------- | ------------------------------------------- |
 | `no_search`          | 纯 LLM 直答（无检索工具）         | `scripts/run_mindsearch.py --arm no_search` |
-| `single_turn_search` | 1 次 query → top-k 页 → 直答      | 同上                                        |
+| `single_turn_search` | 调用一次完整Searcher → 作答，内部检索预算与MindSearch一致 | 同上 |
 | `mindsearch`         | 本复现（动态 DAG + 并行分层检索） | 同上                                        |
 | `react`（可选）      | ReAct 多轮工具调用                | 同上，时间允许再做                          |
 

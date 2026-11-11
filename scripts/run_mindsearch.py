@@ -202,7 +202,7 @@ async def run_no_search(llm, question: str):
 
 
 async def run_single_turn(searcher, llm, question: str):
-    """单轮基线：1 次检索 + 1 次作答（不建 DAG，也不做多轮规划）。"""
+    """单轮基线：调用一次完整Searcher，再作答；内部检索预算与MindSearch相同。"""
     res = await searcher.run(question, f"根问题：{question}")
     urls = []
     for src in res.sources or []:
@@ -365,10 +365,8 @@ def main() -> None:
                              state_schema=MindSearchState)
         app = sg.compile()
     elif args.arm == "single_turn":
-        # 近似论文的 single-turn 基线：1 个 query、1 个结果、1 页
-        single = argparse.Namespace(**vars(args))
-        single.topk, single.max_queries, single.max_read = 1, 1, 1
-        searcher = build_searcher(llm, single)
+        # 一轮Searcher可改写多条查询并读取多页，不根据结果继续规划下一轮。
+        searcher = build_searcher(llm, args)
 
     # ---- 输出目录 ----
     ts = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")

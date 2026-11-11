@@ -269,3 +269,51 @@ def test_single_turn_splits_answer_and_search_costs_even_after_failed_search(ent
     assert result['searcher_completion_tokens'] == 5
     assert result['prompt_tokens'] == 28 and result['completion_tokens'] == 8
     assert result['queries_count'] == 2 and result['pages_read'] == 1
+
+
+@pytest.mark.parametrize('budgets', [(3, 3, 3), (4, 2, 2)])
+def test_single_turn_main_uses_configured_searcher_budgets_once(
+    entry, monkeypatch, tmp_path, budgets,
+):
+    from lychee_mas.methods.build.mindsearch import SearcherResult
+
+    write_env(entry)
+    topk, max_queries, max_read = budgets
+    built = []
+    calls = []
+
+    async def model(prompt):
+        calls.append('answer')
+        return SimpleNamespace(text='Answer: test', n_prompt_pos=11, n_gen_tokens=3)
+
+    class Searcher:
+        async def run(self, question, context):
+            calls.append('searcher')
+            return SearcherResult(sub_question=question, status='empty',
+                                  queries=['q'] * max_queries, pages_read=max_read,
+                                  prompt_tokens=17, completion_tokens=5)
+
+    def build_searcher(llm, args):
+        assert llm is model
+        built.append((args.topk, args.max_queries, args.max_read))
+        return Searcher()
+
+    monkeypatch.setattr(entry, 'build_llm', lambda args: model)
+    monkeypatch.setattr(entry, 'build_searcher', build_searcher)
+    monkeypatch.setattr(entry, 'planner_node_factory', lambda **kw: pytest.fail('no planner'))
+    out = tmp_path / 'runs'
+    argv = ['run_mindsearch.py', '--arm', 'single_turn', '--searcher', 'real',
+            '--question', 'test', '--out-root', str(out)]
+    if budgets != (3, 3, 3):
+        argv += ['--topk', str(topk), '--max-queries', str(max_queries),
+                 '--max-read', str(max_read)]
+    monkeypatch.setattr(sys, 'argv', argv)
+    entry.main()
+    folder = next((out / 'adhoc/single_turn').iterdir())
+    config = json.loads((folder / 'run_config.json').read_text())
+    assert built == [budgets]
+    assert tuple(config[k] for k in ('topk', 'max_queries', 'max_read')) == budgets
+    assert calls == ['searcher', 'answer']
+    sample = json.loads((folder / 'predictions.jsonl').read_text())
+    assert sample['queries_count'] == max_queries and sample['pages_read'] == max_read
+    assert sample['prompt_tokens'] == 28 and sample['completion_tokens'] == 8
