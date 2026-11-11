@@ -385,3 +385,23 @@ Planner成本包含规划、格式/引用纠错及最终回答；Searcher包含�
 目前不做渲染转换；按原样引用可通过，改成可见文字且不再是原文子串时会明确返回
 unsupported_evidence。这些是已知兼容范围，不应将测试通过解读为完整Markdown渲染支持。
 用例同时检查改实体、数字、负号、否定词、标点或使用链接URL/标题隐藏内容时不得误通过。
+
+### 规范化EM与历史结果重算
+
+run_mindsearch.py对loader kind=exact的问答采用独立normalized_em（规范化后完全相等），
+保留原框架exact。run_config、predictions和metrics记录score_metric；framework中的
+quality_metric也标为normalized_em，二值类别scorer_kind仍为exact以兼容框架聚合。
+数值/答案子串不再直接判对，日期不同表达和额外修饰也可能EM为0，应另做人工复核。
+
+离线重算旧运行（命令中的目录替换为实际路径，不需要Key、不下载数据）：
+
+```bash
+PYTHONPATH=src python scripts/rescore_mindsearch.py \
+  runs/eval_benchmarks/bamboogle/no_search/20261111-164348 \
+  --out-root runs/mindsearch_rescored
+```
+
+新目录保存predictions.jsonl和rescore_report.json，逐题保留source_score和原指标名称，
+报告保留原运行配置。只改变离线评分，不代表重新运行了模型，不覆盖旧结果。
+通用analyze_benchmark_run.py若按kind=exact重评分仍会使用框架旧规则，
+此处应使用rescore_mindsearch.py，避免将两种口径混用。

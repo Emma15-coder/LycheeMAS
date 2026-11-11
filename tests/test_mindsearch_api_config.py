@@ -186,11 +186,14 @@ def test_main_auto_loads_keys_and_writes_standard_artifacts_without_network(
     assert metrics["avg_completion_tokens"] == 2
     assert metrics["total_planner_prompt_tokens"] == 10
     assert metrics["avg_queries_count"] == (arm == "single_turn")
-    expected = entry.M.aggregate_samples([sample], run_info={
+    expected = entry.QA_METRICS.aggregate_samples([sample], run_info={
         "model": config["model"], "method": arm, "task": "adhoc",
         "scorer_kind": "exact", "git_sha": config["git_sha"],
     })
     assert metrics["framework"] == expected
+    assert config["score_metric"] == sample["score_metric"] == metrics["score_metric"]
+    assert metrics["score_metric"] == "normalized_em"
+    assert metrics["framework"]["quality_metric"] == "normalized_em"
     assert metrics["framework"]["method"] == arm
     assert metrics["framework"]["total_input_total_positions"] == 10
     assert metrics["framework"]["total_output_text_tokens"] == 2
@@ -317,3 +320,27 @@ def test_single_turn_main_uses_configured_searcher_budgets_once(
     sample = json.loads((folder / 'predictions.jsonl').read_text())
     assert sample['queries_count'] == max_queries and sample['pages_read'] == max_read
     assert sample['prompt_tokens'] == 28 and sample['completion_tokens'] == 8
+
+
+def test_dataset_main_scores_short_answer_with_normalized_em(entry, monkeypatch, tmp_path):
+    write_env(entry)
+
+    async def model(prompt):
+        return SimpleNamespace(text='Answer: 21 June 1837\nexplanation',
+                               n_prompt_pos=10, n_gen_tokens=3)
+
+    monkeypatch.setattr(entry, 'build_llm', lambda args: model)
+    monkeypatch.setattr(entry.BENCH, 'load', lambda name, n: [
+        {'task': 'fake', 'kind': 'exact', 'question': 'test', 'gold': '20 June 1837'}])
+    out = tmp_path / 'runs'
+    monkeypatch.setattr(sys, 'argv', ['run_mindsearch.py', '--arm', 'no_search',
+                                    '--benchmark', 'fake', '--n', '1', '--out-root', str(out)])
+    entry.main()
+    folder = next((out / 'fake/no_search').iterdir())
+    sample = json.loads((folder / 'predictions.jsonl').read_text())
+    metrics = json.loads((folder / 'metrics.json').read_text())
+    assert sample['format_ok'] and sample['prediction'] == '21 June 1837'
+    assert sample['score'] == 0 and sample['is_correct'] is False
+    assert sample['score_metric'] == 'normalized_em'
+    assert metrics['accuracy'] == metrics['framework']['accuracy'] == 0
+    assert metrics['framework']['quality_metric'] == 'normalized_em'
